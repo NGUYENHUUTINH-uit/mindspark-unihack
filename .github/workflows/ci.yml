@@ -1,0 +1,35 @@
+name: MindSpark CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-smart-contracts:
+    name: Build & Test Smart Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'contracts/package.json'
+
+      - name: Install Contracts Dependencies
+        working-directory: ./contracts
+        run: npm ci
+
+      - name: Compile Solidity Contracts
+        working-directory: ./contracts
+        run: npx hardhat compile
+
+      - name: Run Automated Smart Contract Unit Tests
+        working-directory: ./contracts
+        run: npx hardhat test
