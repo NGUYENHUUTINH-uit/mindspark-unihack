@@ -34,6 +34,12 @@ out/
 build/
 dist/
 
+# Helper / Setup Scripts & CSV
+*.ps1
+generate_*.py
+export_*.py
+*.csv
+
 # OS & Editor files
 .DS_Store
 Thumbs.db
