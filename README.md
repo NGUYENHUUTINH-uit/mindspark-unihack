@@ -1,12 +1,20 @@
 # 🧠 MindSpark: AI-Supervised Proof of Cognitive Effort on Avalanche
 
 [![MindSpark CI/CD](https://github.com/NGUYENHUUTINH-uit/mindspark-unihack/actions/workflows/ci.yml/badge.svg)](https://github.com/NGUYENHUUTINH-uit/mindspark-unihack/actions)
-[![Avalanche](https://img.shields.io/badge/Blockchain-Avalanche%20Fuji-E84142?logo=avalanche)](https://avax.network/)
+[![Avalanche](https://img.shields.io/badge/Blockchain-Avalanche%20Fuji-E84142?logo=avalanche)](https://testnet.snowtrace.io/address/0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **UniHack 2026 (Greenwich Vietnam & Avalanche)**  
 > **Track:** Social Finance & AI Agent Economy on x402  
 > **Core Concept:** Proof of Cognitive Effort (PoCE) - Natural Study Pose Recognition + Feynman 30s Voice Reflection + Inverted x402 Micropayments Stream.
+
+---
+
+## 🚀 Deployed Smart Contracts (Avalanche Fuji Testnet)
+
+| Contract Name | Network | Contract Address | Explorer Link |
+| :--- | :---: | :--- | :--- |
+| **StudyStakeVault** | Avalanche Fuji (43113) | `0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223` | [View on Snowtrace](https://testnet.snowtrace.io/address/0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223) |
 
 ---
 
@@ -17,20 +25,13 @@ mindspark-unihack/
 ├── .github/workflows/       # GitHub Actions CI/CD Pipeline (Automated Testing)
 ├── contracts/               # Avalanche Smart Contracts (Solidity, Hardhat)
 │   ├── contracts/           # StudyStakeVault.sol
-│   ├── scripts/             # deploy.js
+│   ├── deployed-addresses.json # Live Fuji Contract Addresses
+│   ├── scripts/             # deploy.js, check-network.js
 │   └── test/                # Automated Unit tests (5/5 passing)
 ├── ai-service/              # Edge-AI & Backend Services (MediaPipe, Whisper, LLM)
 ├── frontend/                # Next.js App, Pomodoro Focus Room, Web3 Wallet
 └── README.md
 ```
-
----
-
-## 🔒 Security & Privacy Guarantees
-
-* **Zero-Knowledge Privacy:** 100% video analysis is processed client-side via **MediaPipe Pose (WebAssembly)**. No frames or video streams are ever uploaded or stored.
-* **Cryptographic Oracle Verification:** Smart contracts utilize **ECDSA / EIP-712 cryptographic signatures** to guarantee that rewards are only distributed for verified study sessions.
-* **Reentrancy Protection:** All financial vaults are guarded by OpenZeppelin `ReentrancyGuard`.
 
 ---
 
@@ -52,14 +53,9 @@ npx hardhat compile
 npx hardhat test
 ```
 
-### 4. Deploy to Avalanche Fuji Testnet
-```bash
-npx hardhat run scripts/deploy.js --network fuji
-```
-
 ---
 
-## 👥 Team
-* **Tech Lead (Blockchain & Backend):** Architecture, Smart Contracts, x402 Rails, EIP-712.
-* **AI Specialist (Computer Vision & NLP):** MediaPipe Pose, Phone Distraction Filter, Feynman Evaluator.
-* **Frontend Lead (UI/UX & Pitch):** Next.js, Web3 Wallet, Demo Video, Pitch Deck.
+## 👥 Team Roles & Contacts
+* **Thành viên 1 (Tech Lead - Blockchain):** Smart Contracts, x402 Rails, Cryptographic Oracle.
+* **Thành viên 2 (AI Lead):** MediaPipe Pose, Phone Distraction Filter, Feynman Whisper Evaluator.
+* **Thành viên 3 (Frontend & Pitch Lead):** Next.js App, Web3 Wallet, Pitch Deck, Video Demo.
