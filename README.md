@@ -1,6 +1,6 @@
 # 🧠 MindSpark: AI-Supervised Proof of Cognitive Effort on Avalanche
 
-[![MindSpark CI/CD](https://github.com/YOUR_GITHUB_ORG/mindspark-unihack/actions/workflows/ci.yml/badge.svg)](https://github.com/)
+[![MindSpark CI/CD](https://github.com/NGUYENHUUTINH-uit/mindspark-unihack/actions/workflows/ci.yml/badge.svg)](https://github.com/NGUYENHUUTINH-uit/mindspark-unihack/actions)
 [![Avalanche](https://img.shields.io/badge/Blockchain-Avalanche%20Fuji-E84142?logo=avalanche)](https://avax.network/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -16,9 +16,9 @@
 mindspark-unihack/
 ├── .github/workflows/       # GitHub Actions CI/CD Pipeline (Automated Testing)
 ├── contracts/               # Avalanche Smart Contracts (Solidity, Hardhat)
-│   ├── contracts/           # StudyStakeVault.sol, StudyBadgeSBT.sol
+│   ├── contracts/           # StudyStakeVault.sol
 │   ├── scripts/             # deploy.js
-│   └── test/                # Unit tests (5/5 passing)
+│   └── test/                # Automated Unit tests (5/5 passing)
 ├── ai-service/              # Edge-AI & Backend Services (MediaPipe, Whisper, LLM)
 ├── frontend/                # Next.js App, Pomodoro Focus Room, Web3 Wallet
 └── README.md
