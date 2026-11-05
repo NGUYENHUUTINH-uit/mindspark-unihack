@@ -18,16 +18,31 @@
 
 ---
 
+## 🔐 Cryptographic Oracle Service (EIP-712 / EIP-191 Attestation)
+
+MindSpark utilizes an off-chain Cryptographic Oracle Relayer to bridge verified AI study proofs into the Avalanche Fuji blockchain without gas costs:
+
+* **Core Service:** [`contracts/services/oracleSigner.js`](contracts/services/oracleSigner.js)
+* **RESTful Microservice:** [`contracts/services/oracleServer.js`](contracts/services/oracleServer.js) (`PORT: 4020`)
+* **Security & Anti-Tamper:**
+  * ✅ ECDSA secp256k1 message signing.
+  * ✅ Nonce tracking to prevent Replay Attacks.
+  * ✅ Chain ID (43113) & Verifying Contract scoping to block Cross-Chain / Cross-Contract Replay Attacks.
+  * ✅ Internal authentication token `x-oracle-auth` protecting against unauthorized callers.
+
+---
+
 ## 🏗️ Monorepo Structure
 
 ```text
 mindspark-unihack/
 ├── .github/workflows/       # GitHub Actions CI/CD Pipeline (Automated Testing)
-├── contracts/               # Avalanche Smart Contracts (Solidity, Hardhat)
+├── contracts/               # Avalanche Smart Contracts & Oracle Services
 │   ├── contracts/           # StudyStakeVault.sol
+│   ├── services/            # oracleSigner.js, oracleServer.js
 │   ├── deployed-addresses.json # Live Fuji Contract Addresses
-│   ├── scripts/             # deploy.js, check-network.js
-│   └── test/                # Automated Unit tests (5/5 passing)
+│   ├── scripts/             # deploy.js, check-network.js, test-oracle-service.js
+│   └── test/                # Automated Unit tests (12/12 passing)
 ├── ai-service/              # Edge-AI & Backend Services (MediaPipe, Whisper, LLM)
 ├── frontend/                # Next.js App, Pomodoro Focus Room, Web3 Wallet
 └── README.md
@@ -35,7 +50,7 @@ mindspark-unihack/
 
 ---
 
-## ⚡ Quick Start (Smart Contracts)
+## ⚡ Quick Start (Smart Contracts & Oracle)
 
 ### 1. Install Dependencies
 ```bash
@@ -43,14 +58,19 @@ cd contracts
 npm install
 ```
 
-### 2. Compile Contracts
-```bash
-npx hardhat compile
-```
-
-### 3. Run Automated Tests
+### 2. Run All Automated Unit Tests (12/12 Tests)
 ```bash
 npx hardhat test
+```
+
+### 3. Start Cryptographic Oracle Server
+```bash
+node services/oracleServer.js
+```
+
+### 4. Verify Live Oracle on Avalanche Fuji
+```bash
+node scripts/test-oracle-service.js
 ```
 
 ---
