@@ -18,6 +18,19 @@
 
 ---
 
+## ⚡ x402 Micropayment Protocol on Avalanche (HTTP 402 Standard)
+
+MindSpark implements bidirectional x402 Micropayment Rails conforming to RFC 2616 HTTP 402:
+
+1. **Inverted x402 Bounty Stream:** Sponsors deposit capital into the Bounty Pool. When verified study minutes are attested by the Cryptographic Oracle, micro-rewards are streamed directly to students (`claimStreamPayout`).
+2. **Pay-per-Query AI Copilot Gateway:** When students invoke advanced AI Socratic tutoring, the server triggers an `HTTP 402 Payment Required` challenge. Micropayments are settled on-chain (`payForAiQuery`) to unlock real-time answers.
+
+* **Smart Contract:** [`contracts/contracts/x402PaymentRail.sol`](contracts/contracts/x402PaymentRail.sol)
+* **Middleware Gateway:** [`contracts/services/x402Middleware.js`](contracts/services/x402Middleware.js)
+* **Demo Simulation:** [`contracts/scripts/demo-x402-flow.js`](contracts/scripts/demo-x402-flow.js)
+
+---
+
 ## 🔐 Cryptographic Oracle Service (EIP-712 / EIP-191 Attestation)
 
 MindSpark utilizes an off-chain Cryptographic Oracle Relayer to bridge verified AI study proofs into the Avalanche Fuji blockchain without gas costs:
@@ -38,11 +51,11 @@ MindSpark utilizes an off-chain Cryptographic Oracle Relayer to bridge verified 
 mindspark-unihack/
 ├── .github/workflows/       # GitHub Actions CI/CD Pipeline (Automated Testing)
 ├── contracts/               # Avalanche Smart Contracts & Oracle Services
-│   ├── contracts/           # StudyStakeVault.sol
-│   ├── services/            # oracleSigner.js, oracleServer.js
+│   ├── contracts/           # StudyStakeVault.sol, x402PaymentRail.sol
+│   ├── services/            # oracleSigner.js, oracleServer.js, x402Middleware.js
 │   ├── deployed-addresses.json # Live Fuji Contract Addresses
-│   ├── scripts/             # deploy.js, check-network.js, test-oracle-service.js
-│   └── test/                # Automated Unit tests (12/12 passing)
+│   ├── scripts/             # deploy.js, check-network.js, test-oracle-service.js, demo-x402-flow.js
+│   └── test/                # Automated Unit tests (19/19 passing)
 ├── ai-service/              # Edge-AI & Backend Services (MediaPipe, Whisper, LLM)
 ├── frontend/                # Next.js App, Pomodoro Focus Room, Web3 Wallet
 └── README.md
@@ -50,7 +63,7 @@ mindspark-unihack/
 
 ---
 
-## ⚡ Quick Start (Smart Contracts & Oracle)
+## ⚡ Quick Start (Smart Contracts, Oracle & x402)
 
 ### 1. Install Dependencies
 ```bash
@@ -58,19 +71,19 @@ cd contracts
 npm install
 ```
 
-### 2. Run All Automated Unit Tests (12/12 Tests)
+### 2. Run All Automated Unit Tests (19/19 Tests)
 ```bash
 npx hardhat test
 ```
 
-### 3. Start Cryptographic Oracle Server
+### 3. Run x402 Protocol Demo
 ```bash
-node services/oracleServer.js
+node scripts/demo-x402-flow.js
 ```
 
-### 4. Verify Live Oracle on Avalanche Fuji
+### 4. Start Cryptographic Oracle Server
 ```bash
-node scripts/test-oracle-service.js
+node services/oracleServer.js
 ```
 
 ---
