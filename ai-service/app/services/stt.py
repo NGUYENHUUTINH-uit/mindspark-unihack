@@ -50,7 +50,7 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.webm") -> str:
                 model=settings.stt_model,
                 api_key=settings.groq_api_key,
             )
-            return transcript
+            return transcript.strip()
         except RateLimitError:
             # 429 — đợi rồi thử lại
             if attempt < 2:
