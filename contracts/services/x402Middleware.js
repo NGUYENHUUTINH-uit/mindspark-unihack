@@ -1,6 +1,8 @@
 const { ethers } = require("ethers");
 const deployedData = require("../deployed-addresses.json");
 
+const paymentRailAddress = deployedData.contracts?.x402PaymentRail?.address || "0x143B9679eE996F1565654a1833709AB84B7Eea3C";
+
 /**
  * @notice Cấu hình chuẩn x402 Micropayment trên Avalanche Fuji
  */
@@ -9,7 +11,7 @@ const X402_CONFIG = {
   networkName: "Avalanche Fuji Testnet",
   standardPriceAvax: "0.005",
   standardPriceWei: ethers.parseEther("0.005"),
-  paymentRailAddress: process.env.X402_PAYMENT_RAIL_ADDRESS || "0x0000000000000000000000000000000000000000",
+  paymentRailAddress: paymentRailAddress,
   rpcUrl: "https://api.avax-test.network/ext/bc/C/rpc"
 };
 
@@ -18,10 +20,10 @@ const X402_CONFIG = {
  * @notice Cổng xử lý mã trạng thái HTTP 402 và xác minh thanh toán vi mô On-Chain
  */
 class X402PaymentGateway {
-  constructor(paymentRailAddress = null, rpcUrl = X402_CONFIG.rpcUrl) {
+  constructor(railAddress = null, rpcUrl = X402_CONFIG.rpcUrl) {
     this.rpcUrl = rpcUrl;
     this.provider = new ethers.JsonRpcProvider(this.rpcUrl);
-    this.paymentRailAddress = paymentRailAddress || X402_CONFIG.paymentRailAddress;
+    this.paymentRailAddress = railAddress || X402_CONFIG.paymentRailAddress;
 
     this.railAbi = [
       "function isQueryPaid(bytes32 queryHash) view returns (bool)",
@@ -29,14 +31,9 @@ class X402PaymentGateway {
       "function totalBountyPool() view returns (uint256)"
     ];
 
-    if (this.paymentRailAddress !== "0x0000000000000000000000000000000000000000") {
-      this.contract = new ethers.Contract(this.paymentRailAddress, this.railAbi, this.provider);
-    }
+    this.contract = new ethers.Contract(this.paymentRailAddress, this.railAbi, this.provider);
   }
 
-  /**
-   * @notice Tạo mã hash định danh duy nhất cho câu hỏi
-   */
   generateQueryHash(studentAddress, questionText) {
     const timestamp = Math.floor(Date.now() / 1000);
     return ethers.solidityPackedKeccak256(
@@ -45,23 +42,18 @@ class X402PaymentGateway {
     );
   }
 
-  /**
-   * @notice Middleware Express kiểm tra và yêu cầu thanh toán vi mô chuẩn HTTP 402
-   */
   requireMicropayment() {
     return async (req, res, next) => {
       const studentAddress = req.headers["x-student-address"] || req.body.studentAddress;
       const queryHash = req.headers["x-402-query-hash"];
-      const txHash = req.headers["x-402-payment-tx"];
 
-      // 1. Nếu chưa có mã queryHash hoặc transaction hash -> Trả về HTTP 402 Payment Required
-      if (!queryHash && !txHash) {
+      // 1. Nếu chưa có header X-402-Query-Hash -> Trả về HTTP 402 Payment Required
+      if (!queryHash) {
         const questionText = req.body.question || "Default AI Consultation";
         const generatedHash = studentAddress 
           ? this.generateQueryHash(studentAddress, questionText)
           : ethers.hexlify(ethers.randomBytes(32));
 
-        // Thiết lập Header HTTP chuẩn x402
         res.set("WWW-Authenticate", `x402 chainId="43113", recipient="${this.paymentRailAddress}", amount="${X402_CONFIG.standardPriceAvax}", token="AVAX", hash="${generatedHash}"`);
 
         return res.status(402).json({
@@ -77,20 +69,13 @@ class X402PaymentGateway {
             queryHash: generatedHash,
             priceAvax: X402_CONFIG.standardPriceAvax,
             priceWei: X402_CONFIG.standardPriceWei.toString(),
-            hint: "Gửi giao dịch payForAiQuery(queryHash) lên contract, sau đó gọi lại API này kèm Header: 'X-402-Query-Hash': queryHash"
+            hint: "Gửi giao dịch payForAiQuery(queryHash) lên contract trên Avalanche Fuji, sau đó gọi lại API kèm Header: 'X-402-Query-Hash': queryHash"
           }
         });
       }
 
-      // 2. Nếu đã đính kèm queryHash -> Kiểm tra xác thực On-chain
+      // 2. Nếu đã có header -> Kiểm tra xác thực On-chain qua RPC Fuji
       try {
-        if (!this.contract) {
-          // Mock mode nếu chưa deploy contract
-          console.log(`[x402] Mock verification for Query Hash: ${queryHash}`);
-          req.x402Verified = true;
-          return next();
-        }
-
         const isPaid = await this.contract.isQueryPaid(queryHash);
         if (!isPaid) {
           return res.status(402).json({
@@ -101,7 +86,7 @@ class X402PaymentGateway {
           });
         }
 
-        console.log(`[x402] ✅ Xác nhận vi thanh toán thành công cho Query Hash: ${queryHash}`);
+        console.log(`[x402 Gateway] ✅ Xác nhận vi thanh toán On-chain hợp lệ cho Query Hash: ${queryHash}`);
         req.x402Verified = true;
         req.verifiedQueryHash = queryHash;
         next();
