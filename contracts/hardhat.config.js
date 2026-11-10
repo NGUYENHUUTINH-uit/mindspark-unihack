@@ -10,6 +10,7 @@ module.exports = {
     version: "0.8.24",
     settings: {
       evmVersion: "cancun",
+      viaIR: true,
       optimizer: {
         enabled: true,
         runs: 200,
@@ -19,9 +20,10 @@ module.exports = {
   networks: {
     hardhat: {},
     fuji: {
-      url: "https://api.avax-test.network/ext/bc/C/rpc",
+      url: "https://avalanche-fuji-c-chain-rpc.publicnode.com",
       chainId: 43113,
       accounts: [FUJI_PRIVATE_KEY],
+      timeout: 60000,
     },
   },
   etherscan: {
