@@ -6,6 +6,11 @@
       "address": "0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223",
       "snowtrace": "https://testnet.snowtrace.io/address/0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223",
       "deployer": "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA"
+    },
+    "StudyBadgeSBT": {
+      "address": "0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86",
+      "snowtrace": "https://testnet.snowtrace.io/address/0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86",
+      "deployer": "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA"
     }
   }
 }
