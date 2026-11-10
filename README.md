@@ -16,6 +16,7 @@
 | :--- | :---: | :--- | :--- |
 | **StudyStakeVault** | Avalanche Fuji (43113) | `0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223` | [View on Snowtrace](https://testnet.snowtrace.io/address/0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223) |
 | **StudyBadgeSBT** | Avalanche Fuji (43113) | `0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86` | [View on Snowtrace](https://testnet.snowtrace.io/address/0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86) |
+| **x402PaymentRail** | Avalanche Fuji (43113) | `0x143B9679eE996F1565654a1833709AB84B7Eea3C` | [View on Snowtrace](https://testnet.snowtrace.io/address/0x143B9679eE996F1565654a1833709AB84B7Eea3C) |
 
 ---
 
@@ -67,10 +68,10 @@ mindspark-unihack/
 ├── .github/workflows/       # GitHub Actions CI/CD Pipeline (Automated Testing)
 ├── contracts/               # Avalanche Smart Contracts & Oracle Services
 │   ├── contracts/           # StudyStakeVault.sol, x402PaymentRail.sol, StudyBadgeSBT.sol
-│   ├── services/            # oracleSigner.js, oracleServer.js, x402Middleware.js
-│   ├── deployed-addresses.json # Live Fuji Contract Addresses
-│   ├── scripts/             # deploy.js, deploy-sbt.js, check-network.js, demo-sbt.js, demo-x402-flow.js
-│   └── test/                # Automated Unit tests (27/27 passing)
+│   ├── services/            # oracleSigner.js, oracleServer.js, x402Middleware.js, apiGateway.js
+│   ├── deployed-addresses.json # Live Fuji Contract Addresses (3 contracts)
+│   ├── scripts/             # deploy.js, deploy-sbt.js, deploy-x402.js, verify-all.js, demo-sbt.js, demo-x402-flow.js
+│   └── test/                # Automated Unit tests (31/31 passing 100%)
 ├── ai-service/              # Edge-AI & Backend Services (MediaPipe, Whisper, LLM)
 ├── frontend/                # Next.js App, Pomodoro Focus Room, Web3 Wallet
 └── README.md
@@ -86,19 +87,29 @@ cd contracts
 npm install
 ```
 
-### 2. Run All Automated Unit Tests (27/27 Tests Pass 100%)
+### 2. Run All Automated Unit Tests (31/31 Tests Pass 100%)
 ```bash
 npx hardhat test
 ```
 
-### 3. Run Dynamic Soulbound NFT Demo
+### 3. Start Unified Web3 & x402 API Gateway
+```bash
+node services/apiGateway.js
+```
+
+### 4. Run Dynamic Soulbound NFT Demo
 ```bash
 npx hardhat run scripts/demo-sbt.js
 ```
 
-### 4. Deploy Soulbound NFT to Avalanche Fuji
+### 5. Run x402 HTTP 402 Flow Demo
 ```bash
-npx hardhat run scripts/deploy-sbt.js --network fuji
+npx hardhat run scripts/demo-x402-flow.js
+```
+
+### 6. Verify All Contracts on Snowtrace
+```bash
+node scripts/verify-all.js
 ```
 
 ---
