@@ -45,3 +45,8 @@ export_*.py
 Thumbs.db
 .vscode/
 .idea/
+
+
+images/
+*.docx
+*.pdf
