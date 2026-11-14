@@ -7,7 +7,7 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.config import get_settings
 from app.routers import feynman, quiz
@@ -82,6 +82,12 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 app.include_router(feynman.router, prefix="/api/feynman", tags=["Feynman Voice"])
 app.include_router(quiz.router,    prefix="/api/quiz",    tags=["Quiz"])
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Tự động chuyển hướng từ trang chủ vào Swagger Docs."""
+    return RedirectResponse(url="/docs")
 
 
 # ---------------------------------------------------------------------------

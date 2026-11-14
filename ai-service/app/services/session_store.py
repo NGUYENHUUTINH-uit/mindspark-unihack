@@ -29,18 +29,34 @@ _proof_store: set[str] = set()
 # Quiz store
 # ---------------------------------------------------------------------------
 
-def create_quiz(questions: list[dict]) -> str:
+def create_quiz(questions: list[dict], topic: str = "") -> str:
     """
     Lưu quiz vào store và trả về quiz_id mới.
     questions: danh sách dict đã xáo thứ tự (từ quiz_service.shuffle_options).
+    topic: chủ đề học để tạo flashcard tổng kết khi đạt điểm tuyệt đối.
     """
     quiz_id = str(uuid.uuid4())
     _quiz_store[quiz_id] = {
         "expires_at": time.monotonic() + _QUIZ_TTL_SECONDS,
         "questions": questions,
+        "topic": topic,
     }
-    logger.debug("Quiz created: quiz_id=%s, n=%d", quiz_id, len(questions))
+    logger.debug("Quiz created: quiz_id=%s, n=%d, topic=%s", quiz_id, len(questions), topic)
     return quiz_id
+
+
+def get_quiz_entry(quiz_id: str) -> Optional[dict[str, Any]]:
+    """
+    Trả toàn bộ dict entry (questions, topic, expires_at) nếu quiz còn hạn.
+    """
+    entry = _quiz_store.get(quiz_id)
+    if entry is None:
+        return None
+    if time.monotonic() > entry["expires_at"]:
+        del _quiz_store[quiz_id]
+        logger.debug("Quiz expired and removed: quiz_id=%s", quiz_id)
+        return None
+    return entry
 
 
 def get_quiz(quiz_id: str) -> Optional[list[dict]]:
@@ -48,15 +64,8 @@ def get_quiz(quiz_id: str) -> Optional[list[dict]]:
     Trả list questions nếu quiz còn hạn, ngược lại trả None.
     KHÔNG xóa quiz ở đây (xóa sau khi submit).
     """
-    entry = _quiz_store.get(quiz_id)
-    if entry is None:
-        return None
-    if time.monotonic() > entry["expires_at"]:
-        # Dọn dẹp luôn khi phát hiện hết hạn
-        del _quiz_store[quiz_id]
-        logger.debug("Quiz expired and removed: quiz_id=%s", quiz_id)
-        return None
-    return entry["questions"]
+    entry = get_quiz_entry(quiz_id)
+    return entry["questions"] if entry else None
 
 
 def delete_quiz(quiz_id: str) -> None:

@@ -14,9 +14,15 @@ import asyncio
 import logging
 import time
 
+import httpx
 from fastapi import HTTPException
-from groq import AsyncGroq, RateLimitError
-from groq import APIStatusError as GroqAPIStatusError
+from groq import (
+    APIConnectionError,
+    APIStatusError as GroqAPIStatusError,
+    APITimeoutError,
+    AsyncGroq,
+    RateLimitError,
+)
 
 from app.config import get_settings
 
@@ -76,6 +82,18 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.webm") -> str:
                     status_code=503,
                     detail="Dịch vụ nhận dạng giọng nói gặp lỗi. Vui lòng thử lại sau.",
                 )
+        except (APIConnectionError, APITimeoutError) as exc:
+            # Lỗi mạng / timeout kết nối tới Groq
+            if attempt < 2:
+                wait = _RETRY_BACKOFF[attempt]
+                logger.warning("Groq STT timeout / lỗi kết nối (%s). Retry %d/2 sau %.1fs.", type(exc).__name__, attempt + 1, wait)
+                await asyncio.sleep(wait)
+            else:
+                logger.error("Groq STT lỗi kết nối sau 2 lần retry.")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Không thể kết nối tới dịch vụ nhận dạng giọng nói. Vui lòng kiểm tra kết nối mạng và thử lại.",
+                )
         except Exception as exc:
             logger.error("Lỗi không xác định khi gọi STT: %s", type(exc).__name__)
             raise HTTPException(
@@ -99,7 +117,9 @@ async def _transcribe_groq(
 
     Groq nhận file dưới dạng tuple (filename, bytes, content_type) qua multipart.
     """
-    client = AsyncGroq(api_key=api_key)
+    # Cấu hình timeout thoải mái cho cả write/upload trên mạng chậm
+    timeout = httpx.Timeout(60.0, connect=15.0, read=60.0, write=60.0)
+    client = AsyncGroq(api_key=api_key, timeout=timeout)
 
     # Xác định content_type từ extension
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "webm"

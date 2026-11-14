@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # --- Model names (đọc từ .env, có default an toàn) ---
     stt_model: str = "whisper-large-v3-turbo"
-    llm_model: str = "gemini-2.0-flash-lite"
+    llm_model: str = "gemini-3.5-flash-lite"
 
     # --- Oracle ---
     oracle_service_url: str = "http://localhost:4020"

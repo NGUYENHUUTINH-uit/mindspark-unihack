@@ -51,7 +51,7 @@ async def generate_quiz(req: QuizGenerateRequest):
     shuffled = quiz_service.shuffle_options(raw_quiz)
 
     # Lưu quiz vào session store (TTL 30 phút, dùng một lần)
-    quiz_id = session_store.create_quiz(shuffled)
+    quiz_id = session_store.create_quiz(shuffled, topic=req.topic)
 
     # Trả câu hỏi cho client (không có đáp án)
     questions_out = [
@@ -82,12 +82,15 @@ async def submit_quiz(req: QuizSubmitRequest):
     # ------------------------------------------------------------------
     # 1. Lấy quiz từ store (kiểm tra hết hạn & tồn tại)
     # ------------------------------------------------------------------
-    quiz_data = session_store.get_quiz(req.quiz_id)
-    if quiz_data is None:
+    quiz_entry = session_store.get_quiz_entry(req.quiz_id)
+    if quiz_entry is None:
         raise HTTPException(
             status_code=404,
             detail="quiz_id không tồn tại hoặc đã hết hạn (TTL 30 phút). Vui lòng tạo quiz mới.",
         )
+
+    quiz_data = quiz_entry["questions"]
+    topic = quiz_entry.get("topic", "")
 
     # ------------------------------------------------------------------
     # 2. Kiểm tra session chưa có proof
@@ -121,7 +124,7 @@ async def submit_quiz(req: QuizSubmitRequest):
     # ------------------------------------------------------------------
     flashcards = quiz_service.build_flashcards(
         wrong_items=wrong_items,
-        topic=quiz_data[0]["question"] if wrong_items == [] else None,
+        topic=topic if wrong_items == [] else None,
     )
 
     # ------------------------------------------------------------------
