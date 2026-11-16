@@ -164,6 +164,15 @@ export default function MindSparkApp() {
       setSecondsLeft(targetMinutes * 60);
       setIsStudying(true);
     } catch (err: any) {
+      // Nếu người dùng chủ động bấm Cancel / Reject trên ví, bỏ qua không báo lỗi
+      if (
+        err?.name === "UserRejectedRequestError" ||
+        err?.message?.includes("User rejected") ||
+        err?.message?.includes("User denied")
+      ) {
+        console.log("Người dùng đã hủy xác nhận giao dịch trên ví.");
+        return;
+      }
       console.error("Lỗi Stake:", err);
       alert(`Lỗi cọc AVAX: ${err.shortMessage || err.message || "Giao dịch bị từ chối"}`);
     }
