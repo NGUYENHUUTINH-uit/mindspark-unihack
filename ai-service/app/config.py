@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     )
 
     # --- API Keys ---
-    groq_api_key: str
-    gemini_api_key: str
+    groq_api_key: str = "mock_groq_key"
+    gemini_api_key: str = "mock_gemini_key"
 
     # --- Model names (đọc từ .env, có default an toàn) ---
     stt_model: str = "whisper-large-v3-turbo"
