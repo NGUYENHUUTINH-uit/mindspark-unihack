@@ -30,7 +30,7 @@ export function ResultModal({
   onClose,
   sessionResult,
 }: ResultModalProps) {
-  const { writeContract, data: txHash, isPending } = useWriteContract();
+  const { writeContract, data: txHash, isPending, error: writeError } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash: txHash,
   });
@@ -125,6 +125,12 @@ export function ResultModal({
               </>
             )}
           </Button>
+        )}
+
+        {writeError && (
+          <div className="text-xs text-rose-400 bg-rose-950/40 border border-rose-900/50 p-2.5 rounded-lg text-center">
+            {(writeError as any).shortMessage || writeError.message || "Giao dịch không thành công"}
+          </div>
         )}
       </DialogContent>
     </Dialog>

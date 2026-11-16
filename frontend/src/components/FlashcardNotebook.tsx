@@ -76,22 +76,30 @@ export function FlashcardNotebook() {
         });
 
         setStatusMsg(
-          "Đã thanh toán On-chain! Đang mở khóa câu trả lời từ AI...",
+          "Đã gửi giao dịch! Đang đợi xác nhận block trên Avalanche Fuji...",
         );
 
-        // Bước 3: Gọi lại API kèm Header X-402-Query-Hash
-        const res2 = await fetch(`${gatewayUrl}/api/v1/ai/ask-expert`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-student-address": address,
-            "x-402-query-hash": queryHash,
-          },
-          body: JSON.stringify({ question, studentAddress: address }),
-        });
+        // Bước 3: Gọi lại API kèm Header X-402-Query-Hash (thử tối đa 4 lần để đợi block mined trên Fuji)
+        let data: any = null;
+        for (let attempt = 1; attempt <= 4; attempt++) {
+          await new Promise((r) => setTimeout(r, attempt === 1 ? 2500 : 1500));
+          const res2 = await fetch(`${gatewayUrl}/api/v1/ai/ask-expert`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-student-address": address,
+              "x-402-query-hash": queryHash,
+            },
+            body: JSON.stringify({ question, studentAddress: address }),
+          });
 
-        const data = await res2.json();
-        if (data.success && data.copilotAnswer?.flashcardSuggestion) {
+          if (res2.ok) {
+            data = await res2.json();
+            break;
+          }
+        }
+
+        if (data && data.success && data.copilotAnswer?.flashcardSuggestion) {
           setCards((prev) => [
             {
               id: Date.now(),
@@ -102,6 +110,8 @@ export function FlashcardNotebook() {
           ]);
           setQuestion("");
           setStatusMsg("✅ Đã tạo Flashcard mới từ AI Expert!");
+        } else {
+          setStatusMsg("⚠️ Đã gửi thanh toán nhưng RPC Fuji đang xử lý. Vui lòng thử bấm lại sau vài giây.");
         }
       }
     } catch (err: any) {
