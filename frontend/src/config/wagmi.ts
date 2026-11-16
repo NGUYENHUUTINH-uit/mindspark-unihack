@@ -5,8 +5,7 @@ import { injected } from "wagmi/connectors";
 export const config = createConfig({
   chains: [avalancheFuji],
   connectors: [
-    injected({ target: "metaMask" }),
-    injected(), // Hỗ trợ Avalanche Core Wallet & các ví trình duyệt khác
+    injected(), // Tự động nhận diện Core Wallet, MetaMask hoặc bất kỳ ví Web3 nào đang cài trên trình duyệt
   ],
   transports: {
     [avalancheFuji.id]: http("https://api.avax-test.network/ext/bc/C/rpc"),

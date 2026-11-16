@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { Web3Provider } from "@/components/Web3Provider";
 
-const inter = Inter({ subsets: ["latin"] });
+const jakarta = Plus_Jakarta_Sans({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "MindSpark | Proof of Cognitive Effort on Avalanche",
-  description: "AI-Supervised Study-to-Earn Protocol on Avalanche Fuji",
+  title: "MindSpark | Study Pomodoro on Avalanche",
+  description: "AI-Supervised Proof of Cognitive Effort on Avalanche Fuji",
 };
 
 export default function RootLayout({
@@ -16,8 +16,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="vi" className="dark">
-      <body className={inter.className}>
+    <html lang="vi">
+      <body className={jakarta.className}>
         <Web3Provider>{children}</Web3Provider>
       </body>
     </html>
