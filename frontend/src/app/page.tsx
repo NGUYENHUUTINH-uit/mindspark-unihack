@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useAccount, useWriteContract, useReadContract } from "wagmi";
+import { useAccount, useWriteContract, useReadContract, useSwitchChain } from "wagmi";
+import { avalancheFuji } from "wagmi/chains";
 import { parseEther } from "viem";
 import { CONTRACTS } from "@/config/wagmi";
 import { VAULT_ABI, SBT_ABI } from "@/config/abis";
@@ -24,8 +25,9 @@ import {
 } from "lucide-react";
 
 export default function MindSparkApp() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId } = useAccount();
   const { writeContractAsync } = useWriteContract();
+  const { switchChainAsync } = useSwitchChain();
 
   // Trạng thái Pomodoro & AI Supervisor
   const [targetMinutes, setTargetMinutes] = useState(25);
@@ -139,6 +141,16 @@ export default function MindSparkApp() {
   // Bắt đầu phiên học: Stake 0.01 AVAX vào Vault (Gọi đúng hàm stake(targetMinutes, durationDays))
   const handleStartSession = async () => {
     if (!isConnected) return alert("Vui lòng kết nối ví Avalanche Fuji trước!");
+
+    // Tự động yêu cầu chuyển sang mạng Avalanche Fuji nếu đang ở mạng khác
+    if (chainId !== avalancheFuji.id) {
+      try {
+        await switchChainAsync({ chainId: avalancheFuji.id });
+      } catch (err: any) {
+        return alert("Vui lòng chuyển ví MetaMask sang mạng Avalanche Fuji để cọc token AVAX testnet!");
+      }
+    }
+
     try {
       // Contract yêu cầu targetMinutes >= 30, durationDays >= 1
       const minutesForContract = BigInt(Math.max(30, targetMinutes));
