@@ -217,7 +217,7 @@ export function WalletConnectButton() {
         variant="destructive"
         disabled={isSwitching}
         onClick={handleSwitchNetwork}
-        className="gap-2 animate-pulse bg-amber-600 hover:bg-amber-700"
+        className="gap-2 animate-pulse bg-amber-600 hover:bg-amber-700 text-white"
       >
         {isSwitching ? (
           <Loader2 className="w-4 h-4 animate-spin" />
@@ -231,25 +231,25 @@ export function WalletConnectButton() {
 
   // Khi đã kết nối thành công và đúng mạng Fuji
   return (
-    <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">
-      <div className="text-right">
-        <div className="text-xs text-slate-400">
+    <div className="flex items-center gap-2.5 bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-full text-slate-200 shadow-sm">
+      <div className="text-right leading-tight">
+        <div className="text-[10px] text-slate-400 font-medium">
           {balance
             ? `${Number(formatUnits(balance.value, balance.decimals)).toFixed(3)} AVAX`
             : "0.000 AVAX"}
         </div>
-        <div className="text-sm font-mono text-emerald-400">
+        <div className="text-xs font-mono font-semibold text-emerald-400">
           {address?.slice(0, 6)}...{address?.slice(-4)}
         </div>
       </div>
-      <Button
-        variant="ghost"
-        size="icon"
+      <button
+        type="button"
         onClick={() => disconnect()}
+        className="p-1 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
         title="Ngắt kết nối"
       >
-        <LogOut className="w-4 h-4 text-slate-400 hover:text-red-400" />
-      </Button>
+        <LogOut className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }

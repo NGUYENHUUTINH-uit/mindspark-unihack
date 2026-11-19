@@ -1,18 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { useAccount, useWriteContract } from "wagmi";
 import { parseEther } from "viem";
 import { CONTRACTS } from "@/config/wagmi";
 import { X402_ABI } from "@/config/abis";
-import { BookOpen, Sparkles, RotateCw, Zap } from "lucide-react";
+import { Sparkles, RotateCw, Feather, Loader2 } from "lucide-react";
 
 interface Flashcard {
   id: number;
+  tag: string;
   front: string;
   back: string;
 }
@@ -24,13 +21,15 @@ export function FlashcardNotebook() {
   const [cards, setCards] = useState<Flashcard[]>([
     {
       id: 1,
-      front: "Proof of Cognitive Effort (PoCE) là gì?",
-      back: "Cơ chế kết hợp AI giám sát tư thế học tập + Tóm tắt Feynman 30s để chứng minh nỗ lực nhận thức thực sự trên Blockchain.",
+      tag: "Core Concept",
+      front: "Proof of Cognitive Effort (PoCE) hoạt động như thế nào?",
+      back: "Kết hợp thị giác máy tính (MediaPipe) giám sát tư thế học tập và phân tích giọng nói Feynman 30s để xác thực nỗ lực nhận thức thực sự lên Blockchain.",
     },
     {
       id: 2,
-      front: "Giao thức x402 hoạt động như thế nào?",
-      back: "Chuẩn hóa mã HTTP 402 Payment Required để thực hiện vi thanh toán (micropayments) tức thì trên Avalanche Fuji.",
+      tag: "x402 Protocol",
+      front: "Tại sao MindSpark dùng chuẩn HTTP 402 trên Avalanche?",
+      back: "Cho phép dòng tiền vi thanh toán (micropayments) chảy tự động từ quỹ tài trợ về ví sinh viên theo từng phút học mà không cần trung gian.",
     },
   ]);
 
@@ -42,13 +41,12 @@ export function FlashcardNotebook() {
   const handleAskExpertX402 = async () => {
     if (!question.trim() || !address) return;
     setLoadingAi(true);
-    setStatusMsg("Đang gửi yêu cầu tới AI Copilot...");
+    setStatusMsg("Đang kết nối AI Socratic Copilot...");
 
     const gatewayUrl =
       process.env.NEXT_PUBLIC_API_GATEWAY_URL || "http://localhost:4020";
 
     try {
-      // Bước 1: Gọi API lần đầu -> Sẽ nhận HTTP 402 Payment Required
       const res1 = await fetch(`${gatewayUrl}/api/v1/ai/ask-expert`, {
         method: "POST",
         headers: {
@@ -62,11 +60,8 @@ export function FlashcardNotebook() {
         const challenge = await res1.json();
         const { queryHash, priceAvax } = challenge.paymentInstructions;
 
-        setStatusMsg(
-          `HTTP 402: Yêu cầu vi thanh toán ${priceAvax} AVAX. Vui lòng xác nhận trên ví...`,
-        );
+        setStatusMsg(`Mở khóa câu trả lời chuyên sâu (${priceAvax} AVAX)...`);
 
-        // Bước 2: Thanh toán vi mô on-chain qua x402PaymentRail
         await writeContractAsync({
           address: CONTRACTS.X402,
           abi: X402_ABI,
@@ -76,25 +71,34 @@ export function FlashcardNotebook() {
         });
 
         setStatusMsg(
-          "Đã thanh toán On-chain! Đang mở khóa câu trả lời từ AI...",
+          "Đã gửi giao dịch! Đang đợi xác nhận block trên Avalanche Fuji...",
         );
 
-        // Bước 3: Gọi lại API kèm Header X-402-Query-Hash
-        const res2 = await fetch(`${gatewayUrl}/api/v1/ai/ask-expert`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-student-address": address,
-            "x-402-query-hash": queryHash,
-          },
-          body: JSON.stringify({ question, studentAddress: address }),
-        });
+        // Bước 3: Gọi lại API kèm Header X-402-Query-Hash (thử tối đa 4 lần để đợi block mined trên Fuji)
+        let data: any = null;
+        for (let attempt = 1; attempt <= 4; attempt++) {
+          await new Promise((r) => setTimeout(r, attempt === 1 ? 2500 : 1500));
+          const res2 = await fetch(`${gatewayUrl}/api/v1/ai/ask-expert`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-student-address": address,
+              "x-402-query-hash": queryHash,
+            },
+            body: JSON.stringify({ question, studentAddress: address }),
+          });
 
-        const data = await res2.json();
-        if (data.success && data.copilotAnswer?.flashcardSuggestion) {
+          if (res2.ok) {
+            data = await res2.json();
+            break;
+          }
+        }
+
+        if (data && data.success && data.copilotAnswer?.flashcardSuggestion) {
           setCards((prev) => [
             {
               id: Date.now(),
+              tag: "AI Generated • x402",
               front: data.copilotAnswer.flashcardSuggestion.front,
               back: data.copilotAnswer.flashcardSuggestion.back,
             },
@@ -102,83 +106,86 @@ export function FlashcardNotebook() {
           ]);
           setQuestion("");
           setStatusMsg("✅ Đã tạo Flashcard mới từ AI Expert!");
+        } else {
+          setStatusMsg("⚠️ Đã gửi thanh toán nhưng RPC Fuji đang xử lý. Vui lòng thử bấm lại sau vài giây.");
         }
       }
     } catch (err: any) {
-      setStatusMsg(
-        `❌ Lỗi: ${err.message || "Không thể hoàn tất thanh toán x402"}`,
-      );
+      setStatusMsg(`Chưa hoàn tất: ${err.message || "Giao dịch bị hủy"}`);
     } finally {
       setLoadingAi(false);
     }
   };
 
   return (
-    <div className="space-y-6">
-      {/* Thanh hỏi AI tạo Flashcard qua x402 */}
-      <Card className="p-4 bg-slate-900 border-slate-800 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-white flex items-center gap-2">
-            <Zap className="w-4 h-4 text-amber-400" />
-            AI Socratic Copilot (x402 Micropayment)
-          </h3>
-          <Badge
-            variant="outline"
-            className="border-amber-500/40 text-amber-400"
-          >
-            0.005 AVAX / Query
-          </Badge>
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Khung hỏi AI Socratic */}
+      <div className="bg-[#FCFBF7] border border-[#E5DFD3] rounded-3xl p-6 shadow-sm space-y-3">
+        <div className="flex items-center justify-between text-xs">
+          <span className="flex items-center gap-1.5 font-semibold text-[#2D2620]">
+            <Feather className="w-3.5 h-3.5 text-[#6E8E72]" /> Trợ lý chắt lọc
+            kiến thức Socratic
+          </span>
+          <span className="px-3 py-1 rounded-full bg-[#F3EFE6] text-[#6E8E72] font-medium">
+            0.005 AVAX / lượt hỏi
+          </span>
         </div>
 
-        <div className="flex gap-2">
-          <Input
-            placeholder="Nhập khái niệm khó để AI giải thích & tạo Flashcard..."
+        <div className="flex gap-2.5">
+          <input
+            placeholder="Đặt một câu hỏi khó để AI giải mã thành thẻ ghi nhớ..."
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            className="bg-slate-950 border-slate-700 text-white"
+            onKeyDown={(e) => e.key === "Enter" && handleAskExpertX402()}
+            className="flex-1 bg-[#F5F2EA] border border-[#E5DFD3] text-[#2D2620] placeholder:text-[#9A9084] text-sm px-4 h-11 rounded-full focus:outline-none focus:border-[#6E8E72]"
           />
-          <Button
+          <button
             onClick={handleAskExpertX402}
             disabled={loadingAi || !address}
-            className="bg-amber-600 hover:bg-amber-500 text-white shrink-0 gap-1"
+            className="bg-[#6E8E72] hover:bg-[#5d7a61] disabled:opacity-50 text-white text-xs font-medium h-11 px-5 rounded-full shrink-0 flex items-center gap-2 transition-all"
           >
-            <Sparkles className="w-4 h-4" />
-            {loadingAi ? "Đang xử lý..." : "Hỏi AI"}
-          </Button>
+            {loadingAi ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Sparkles className="w-4 h-4" />
+            )}
+            {loadingAi ? "Đang xử lý" : "Tạo thẻ AI"}
+          </button>
         </div>
-        {statusMsg && <p className="text-xs text-cyan-400">{statusMsg}</p>}
-      </Card>
+        {statusMsg && (
+          <p className="text-xs text-[#6E8E72] pl-2">{statusMsg}</p>
+        )}
+      </div>
 
-      {/* Danh sách Flashcards */}
+      {/* Danh sách thẻ Flashcard */}
       <div className="grid md:grid-cols-2 gap-4">
         {cards.map((card) => {
           const isFlipped = flippedId === card.id;
           return (
-            <Card
+            <div
               key={card.id}
               onClick={() => setFlippedId(isFlipped ? null : card.id)}
-              className="p-5 bg-slate-900/90 border-slate-800 hover:border-[#E84142]/60 transition-all cursor-pointer min-h-[160px] flex flex-col justify-between"
+              className={`rounded-3xl p-6 min-h-[190px] flex flex-col justify-between cursor-pointer transition-all border ${
+                isFlipped
+                  ? "bg-[#F3EFE6] border-[#6E8E72]/40"
+                  : "bg-[#FCFBF7] border-[#E5DFD3] hover:border-[#6E8E72]/60 shadow-sm"
+              }`}
             >
-              <div className="flex justify-between items-center text-xs text-slate-400">
-                <span className="flex items-center gap-1">
-                  <BookOpen className="w-3.5 h-3.5" />
-                  {isFlipped
-                    ? "Định nghĩa / Giải thích"
-                    : "Câu hỏi / Khái niệm"}
-                </span>
+              <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#8C8275] font-medium">
+                <span>{isFlipped ? "Giải mã" : card.tag}</span>
                 <RotateCw className="w-3.5 h-3.5" />
               </div>
 
               <p
-                className={`my-3 ${isFlipped ? "text-slate-200 text-sm" : "text-white font-semibold text-base"}`}
+                className={`my-3 leading-relaxed ${isFlipped ? "text-[#4A423A] text-sm" : "text-[#2D2620] text-base font-semibold"}`}
               >
                 {isFlipped ? card.back : card.front}
               </p>
 
-              <span className="text-[11px] text-slate-500">
-                Nhấn vào thẻ để lật
+              <span className="text-[11px] text-[#9A9084]">
+                Chạm vào thẻ để lật
               </span>
-            </Card>
+            </div>
           );
         })}
       </div>

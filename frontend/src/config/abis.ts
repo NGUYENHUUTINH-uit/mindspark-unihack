@@ -1,9 +1,12 @@
 export const VAULT_ABI = [
   {
-    name: "stakeForSession",
+    name: "stake",
     type: "function",
     stateMutability: "payable",
-    inputs: [{ name: "targetMinutes", type: "uint256" }],
+    inputs: [
+      { name: "targetMinutes", type: "uint256" },
+      { name: "durationDays", type: "uint256" },
+    ],
     outputs: [],
   },
   {
@@ -18,15 +21,25 @@ export const VAULT_ABI = [
     outputs: [],
   },
   {
-    name: "sessions",
+    name: "userSessions",
     type: "function",
     stateMutability: "view",
     inputs: [{ name: "student", type: "address" }],
     outputs: [
       { name: "stakedAmount", type: "uint256" },
       { name: "targetMinutes", type: "uint256" },
+      { name: "startTime", type: "uint256" },
+      { name: "deadline", type: "uint256" },
       { name: "isActive", type: "bool" },
+      { name: "isClaimed", type: "bool" },
     ],
+  },
+  {
+    name: "userNonces",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "student", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
 
@@ -39,14 +52,23 @@ export const SBT_ABI = [
     outputs: [{ name: "", type: "string" }],
   },
   {
+    name: "studentToBadgeId",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "student", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
     name: "badgeMetrics",
     type: "function",
     stateMutability: "view",
     inputs: [{ name: "tokenId", type: "uint256" }],
     outputs: [
-      { name: "level", type: "uint256" },
-      { name: "totalMinutes", type: "uint256" },
-      { name: "avgFeynmanScore", type: "uint256" },
+      { name: "level", type: "uint8" },
+      { name: "totalStudyMinutes", type: "uint32" },
+      { name: "sessionsCompleted", type: "uint32" },
+      { name: "avgFeynmanScore", type: "uint32" },
+      { name: "lastSessionTimestamp", type: "uint64" },
     ],
   },
 ] as const;

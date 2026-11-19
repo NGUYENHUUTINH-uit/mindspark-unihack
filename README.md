@@ -107,10 +107,37 @@ npx hardhat run scripts/demo-sbt.js
 npx hardhat run scripts/demo-x402-flow.js
 ```
 
-### 6. Verify All Contracts on Snowtrace
+### 6. Run E2E System Dry-Run & Audit (Task MU-26)
+```bash
+node scripts/dry-run-e2e.js
+```
+
+### 7. Verify All Contracts on Snowtrace
 ```bash
 node scripts/verify-all.js
 ```
+
+---
+
+## 🚀 Running the Full-Stack DApp (E2E Integration)
+
+Để khởi chạy toàn bộ 3 tầng hệ thống MindSpark phục vụ chạy thử (Dry-Run) và quay Video Demo:
+
+```bash
+# Terminal 1: Web3 & Cryptographic Oracle Gateway (Port 4020)
+cd contracts
+node services/apiGateway.js
+
+# Terminal 2: AI Feynman STT & Quiz Service (Port 8000)
+cd ai-service
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+
+# Terminal 3: Next.js Frontend DApp (Port 3000)
+cd frontend
+npm run dev
+```
+Truy cập: **http://localhost:3000** để bắt đầu trải nghiệm!
 
 ---
 
