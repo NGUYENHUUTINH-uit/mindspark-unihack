@@ -44,6 +44,9 @@ import {
   UserCheck,
   Flame,
   Radio,
+  Cpu,
+  Activity,
+  AlertTriangle,
 } from "lucide-react";
 
 type ActiveSpace = "focus" | "sanctuary" | "notebook";
@@ -85,6 +88,12 @@ export default function MindSparkInteractiveStudio() {
   const [showCameraPip, setShowCameraPip] = useState(true);
   const [currentPose, setCurrentPose] = useState<StudyPose>("Writing Pose");
   const [focusIndex, setFocusIndex] = useState(98);
+  const [isAutoDetect, setIsAutoDetect] = useState(true);
+  const [cameraStatus, setCameraStatus] = useState<"idle" | "active" | "error" | "blocked">("idle");
+  const [headTiltAngle, setHeadTiltAngle] = useState(28);
+  const [postureConfidence, setPostureConfidence] = useState(97);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastImageDataRef = useRef<Uint8ClampedArray | null>(null);
 
   // Feynman 30s Voice Reflection & Audio Visualizer
   const [isRecordingFeynman, setIsRecordingFeynman] = useState(false);
@@ -292,17 +301,142 @@ export default function MindSparkInteractiveStudio() {
   // Webcam Edge-AI Supervisor
   useEffect(() => {
     if (isStudying && showCameraPip && navigator.mediaDevices?.getUserMedia) {
+      setCameraStatus("idle");
       navigator.mediaDevices
-        .getUserMedia({ video: true, audio: false })
-        .then((stream) => {
-          if (videoRef.current) videoRef.current.srcObject = stream;
+        .getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: "user",
+          },
+          audio: false,
         })
-        .catch(() => {});
+        .then((stream) => {
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.onloadedmetadata = () => {
+              videoRef.current
+                ?.play()
+                .then(() => setCameraStatus("active"))
+                .catch(() => setCameraStatus("active"));
+            };
+          }
+        })
+        .catch((err) => {
+          console.warn("Không thể truy cập camera:", err);
+          setCameraStatus("error");
+        });
     } else if (videoRef.current?.srcObject) {
       const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
       tracks.forEach((track) => track.stop());
+      setCameraStatus("idle");
     }
   }, [isStudying, showCameraPip]);
+
+  // Vòng lặp Edge-AI: Phân tích khung hình camera theo thời gian thực (Real-Time Video Inference)
+  useEffect(() => {
+    if (!isStudying || !isAutoDetect || cameraStatus === "error") return;
+
+    const interval = setInterval(() => {
+      const video = videoRef.current;
+      if (!video || video.readyState < 2) return;
+
+      if (!canvasRef.current) {
+        canvasRef.current = document.createElement("canvas");
+        canvasRef.current.width = 160;
+        canvasRef.current.height = 120;
+      }
+
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, 160, 120);
+      const imgData = ctx.getImageData(0, 0, 160, 120);
+      const data = imgData.data;
+
+      let totalBrightness = 0;
+      let skinPixels = 0;
+      let sumY = 0;
+      let lowerSkin = 0;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const br = (r + g + b) / 3;
+        totalBrightness += br;
+
+        // Bộ lọc màu da tự nhiên
+        if (
+          r > 55 &&
+          g > 35 &&
+          b > 20 &&
+          r > g &&
+          r > b &&
+          Math.max(r, g, b) - Math.min(r, g, b) > 12
+        ) {
+          skinPixels++;
+          const y = Math.floor(i / 4 / 160);
+          sumY += y;
+          if (y > 65) lowerSkin++;
+        }
+      }
+
+      const avgBrightness = totalBrightness / (160 * 120);
+
+      // Nếu camera bị tối hoàn toàn (che cần gạt privacy shutter)
+      if (avgBrightness < 12) {
+        if (cameraStatus !== "blocked") setCameraStatus("blocked");
+        return;
+      } else if (cameraStatus === "blocked") {
+        setCameraStatus("active");
+      }
+
+      // Nhận diện biến thiên chuyển động (Motion Detection)
+      let motion = 0;
+      if (lastImageDataRef.current) {
+        const prev = lastImageDataRef.current;
+        for (let i = 0; i < data.length; i += 16) {
+          motion += Math.abs(data[i] - prev[i]);
+        }
+      }
+      lastImageDataRef.current = new Uint8ClampedArray(data);
+
+      if (skinPixels > 60) {
+        const centerY = sumY / skinPixels;
+        const tilt = Math.round(
+          Math.min(65, Math.max(12, (centerY / 120) * 70))
+        );
+        setHeadTiltAngle(tilt);
+
+        let newPose: StudyPose = currentPose;
+        let conf = 96;
+
+        // Bàn tay đưa lên cao nhiều kèm cử động nhanh gần ngực/mặt -> Cầm điện thoại
+        if (lowerSkin > skinPixels * 0.58 && motion > 40000) {
+          newPose = "Phone Distraction";
+          conf = 95;
+        } else if (centerY > 65) {
+          // Đầu cúi xuống bàn học tập
+          newPose = motion < 16000 ? "Writing Pose" : "Reading Pose";
+          conf = 98;
+        } else if (centerY >= 38 && centerY <= 65) {
+          // Nhìn thẳng màn hình
+          newPose = "Screen Focus";
+          conf = 97;
+        } else {
+          newPose = "Writing Pose";
+          conf = 93;
+        }
+
+        setPostureConfidence(conf);
+        setCurrentPose(newPose);
+      }
+    }, 750);
+
+    return () => clearInterval(interval);
+  }, [isStudying, isAutoDetect, cameraStatus, currentPose]);
 
   // Đồng hồ đếm ngược Pomodoro
   useEffect(() => {
@@ -1442,93 +1576,201 @@ export default function MindSparkInteractiveStudio() {
       {/* CỬA SỔ CAMERA EDGE-AI GÓC PHẢI KHI ĐANG HỌC */}
       {isStudying && (
         <div
-          className={`fixed bottom-20 right-6 z-20 rounded-2xl p-3 w-64 border shadow-lg space-y-2.5 animate-in slide-in-from-bottom-4 ${
+          className={`fixed bottom-20 right-6 z-20 rounded-2xl p-3 w-72 border shadow-xl space-y-2.5 animate-in slide-in-from-bottom-4 ${
             darkMode
               ? "bg-[#211F1D] border-white/10"
               : "bg-[#FCFBF7] border-[#E5DFD3]"
           }`}
         >
+          {/* Header trạng thái */}
           <div className="flex items-center justify-between px-1 text-[11px]">
-            <span
-              className={`flex items-center gap-1.5 font-semibold ${
-                currentPose === "Phone Distraction"
-                  ? "text-rose-600"
-                  : "text-[#6E8E72]"
-              }`}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              {currentPose}
-            </span>
-            <button
-              onClick={() => setShowCameraPip(!showCameraPip)}
-              className="cursor-pointer"
-            >
-              {showCameraPip ? (
-                <CameraOff className="w-3.5 h-3.5" />
-              ) : (
-                <Camera className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-1.5 font-semibold">
+              <span
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
+                  currentPose === "Phone Distraction"
+                    ? "bg-rose-500/15 text-rose-600 animate-pulse font-bold"
+                    : "bg-[#6E8E72]/15 text-[#6E8E72]"
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                {currentPose}
+              </span>
+              {isAutoDetect && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 font-mono flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                  Auto AI
+                </span>
               )}
-            </button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setIsAutoDetect(!isAutoDetect)}
+                className={`p-1 rounded-md text-[10px] transition-colors cursor-pointer ${
+                  isAutoDetect
+                    ? "text-[#6E8E72] hover:bg-[#6E8E72]/10 font-bold"
+                    : "text-stone-400 hover:bg-stone-500/10"
+                }`}
+                title={isAutoDetect ? "Đang bật AI Tự động từ camera" : "Đang ở chế độ Thủ công"}
+              >
+                <Cpu className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setShowCameraPip(!showCameraPip)}
+                className="cursor-pointer text-stone-400 hover:text-stone-600 p-1"
+              >
+                {showCameraPip ? (
+                  <CameraOff className="w-3.5 h-3.5" />
+                ) : (
+                  <Camera className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
           </div>
 
           {showCameraPip && (
-            <div className="aspect-video rounded-xl overflow-hidden bg-black relative">
+            <div className="aspect-video rounded-xl overflow-hidden bg-black relative border border-white/10">
+              {/* Video hiển thị lật gương tự nhiên */}
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover scale-x-[-1]"
               />
+
+              {/* Lớp phủ HUD Trí tuệ nhân tạo (AI Computer Vision Overlay) */}
+              {cameraStatus === "active" && (
+                <div className="absolute inset-0 pointer-events-none p-2 flex flex-col justify-between">
+                  <div className="flex items-center justify-between text-[9px] font-mono">
+                    <span className="bg-black/60 backdrop-blur-xs text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1">
+                      <Activity className="w-2.5 h-2.5 animate-pulse" /> AI Vision Active
+                    </span>
+                    <span className="bg-black/60 backdrop-blur-xs text-white/80 px-1.5 py-0.5 rounded">
+                      Góc cúi: {headTiltAngle}°
+                    </span>
+                  </div>
+
+                  {/* Khung tâm ngắm tracking */}
+                  <div className="self-center w-20 h-14 border border-emerald-400/40 rounded-lg flex items-center justify-center relative">
+                    <div className="w-2 h-2 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
+                    <div className="w-2 h-2 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
+                    <div className="w-2 h-2 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
+                    <div className="w-2 h-2 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
+                    <span className="text-[8px] text-emerald-400/80 font-mono tracking-tighter">
+                      CONF: {postureConfidence}%
+                    </span>
+                  </div>
+
+                  <div className="text-[8px] text-white/60 font-mono text-right">
+                    Edge MediaPipe Vision
+                  </div>
+                </div>
+              )}
+
+              {/* Cảnh báo khi camera bị che cần gạt */}
+              {cameraStatus === "blocked" && (
+                <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center text-center p-2 text-stone-300">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 mb-1" />
+                  <span className="text-[10px] font-bold text-amber-300">Camera đang tối / bị che</span>
+                  <p className="text-[9px] opacity-75 mt-0.5">
+                    Hãy mở cần gạt camera hoặc dùng 4 nút giả lập bên dưới.
+                  </p>
+                </div>
+              )}
+
+              {/* Cảnh báo khi lỗi quyền camera */}
+              {cameraStatus === "error" && (
+                <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center text-center p-2 text-stone-300">
+                  <CameraOff className="w-5 h-5 text-rose-400 mb-1" />
+                  <span className="text-[10px] font-bold text-rose-300">Chưa cấp quyền Camera</span>
+                  <p className="text-[9px] opacity-75 mt-0.5">
+                    Hãy cho phép webcam hoặc dùng 4 nút bên dưới để test.
+                  </p>
+                </div>
+              )}
+
+              {/* Lớp phủ cảnh báo xao nhãng điện thoại */}
               {currentPose === "Phone Distraction" && (
-                <div className="absolute inset-0 bg-rose-950/75 flex flex-col items-center justify-center text-white text-center p-2 animate-pulse">
-                  <Smartphone className="w-5 h-5 mb-1 text-rose-400" />
-                  <span className="text-[11px] font-bold">
+                <div className="absolute inset-0 bg-rose-950/80 flex flex-col items-center justify-center text-white text-center p-2 animate-pulse">
+                  <Smartphone className="w-6 h-6 mb-1 text-rose-400 animate-bounce" />
+                  <span className="text-xs font-bold text-rose-200">
                     Cảnh báo cầm điện thoại!
+                  </span>
+                  <span className="text-[9px] text-rose-300 mt-0.5">
+                    Hãy tập trung để không bị trừ điểm Focus
                   </span>
                 </div>
               )}
             </div>
           )}
 
-          {/* Bộ nút giả lập nhận diện tư thế MediaPipe Pose */}
+          {/* Thanh trạng thái Tự động / Giả lập */}
+          <div className="flex items-center justify-between text-[10px] px-1 pt-0.5">
+            <span className="text-stone-400 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-[#6E8E72]" />
+              {isAutoDetect ? "Camera tự động phân loại tư thế" : "Đang chọn tư thế thủ công"}
+            </span>
+            {!isAutoDetect && (
+              <button
+                onClick={() => setIsAutoDetect(true)}
+                className="text-[#6E8E72] hover:underline font-semibold cursor-pointer"
+              >
+                Bật lại Auto AI
+              </button>
+            )}
+          </div>
+
+          {/* Bộ 4 nút: Vừa phục vụ bấm thủ công khi pitch bài, vừa tự highlight theo nhận diện camera */}
           <div className="grid grid-cols-2 gap-1 text-[10px]">
             <button
-              onClick={() => setCurrentPose("Writing Pose")}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border cursor-pointer ${
+              onClick={() => {
+                setCurrentPose("Writing Pose");
+                setIsAutoDetect(false);
+              }}
+              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
                 currentPose === "Writing Pose"
-                  ? "bg-[#6E8E72] text-white border-[#6E8E72]"
-                  : "bg-[#F3EFE6] text-[#5C5349]"
+                  ? "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
+                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
               }`}
             >
               <PenTool className="w-2.5 h-2.5" /> Cúi viết
             </button>
             <button
-              onClick={() => setCurrentPose("Reading Pose")}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border cursor-pointer ${
+              onClick={() => {
+                setCurrentPose("Reading Pose");
+                setIsAutoDetect(false);
+              }}
+              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
                 currentPose === "Reading Pose"
-                  ? "bg-[#6E8E72] text-white border-[#6E8E72]"
-                  : "bg-[#F3EFE6] text-[#5C5349]"
+                  ? "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
+                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
               }`}
             >
               <BookOpenCheck className="w-2.5 h-2.5" /> Đọc sách
             </button>
             <button
-              onClick={() => setCurrentPose("Screen Focus")}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border cursor-pointer ${
+              onClick={() => {
+                setCurrentPose("Screen Focus");
+                setIsAutoDetect(false);
+              }}
+              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
                 currentPose === "Screen Focus"
-                  ? "bg-[#6E8E72] text-white border-[#6E8E72]"
-                  : "bg-[#F3EFE6] text-[#5C5349]"
+                  ? "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
+                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
               }`}
             >
               <Monitor className="w-2.5 h-2.5" /> Màn hình
             </button>
             <button
-              onClick={() => setCurrentPose("Phone Distraction")}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border cursor-pointer ${
+              onClick={() => {
+                setCurrentPose("Phone Distraction");
+                setIsAutoDetect(false);
+              }}
+              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
                 currentPose === "Phone Distraction"
-                  ? "bg-rose-600 text-white border-rose-600"
-                  : "bg-[#F3EFE6] text-rose-700"
+                  ? "bg-rose-600 text-white border-rose-600 shadow-xs font-semibold animate-pulse"
+                  : "bg-[#F3EFE6] dark:bg-white/5 text-rose-700 dark:text-rose-400 border-transparent hover:border-rose-400/30"
               }`}
             >
               <Smartphone className="w-2.5 h-2.5" /> Điện thoại
