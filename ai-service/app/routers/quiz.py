@@ -4,13 +4,19 @@ routers/quiz.py — Endpoints cho Chế độ B: Quiz trắc nghiệm.
 POST /api/quiz/generate  → sinh câu hỏi, lưu đáp án phía server
 POST /api/quiz/submit    → chấm bài, trả proof nếu đạt
 """
+import io
 import logging
+from pathlib import Path
+import re
 import time
+import xml.etree.ElementTree as ET
+import zipfile
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.schemas import (
     AnswerItem,
+    FileExtractResponse,
     FlashCard,
     ProofData,
     QuizGenerateRequest,
@@ -28,6 +34,89 @@ from app.services import session_store
 logger = logging.getLogger("mindspark.quiz")
 
 router = APIRouter()
+
+_MAX_DOC_BYTES = 10 * 1024 * 1024
+_MAX_EXTRACTED_CHARS = 9500
+_TEXT_DOC_EXTS = {".txt", ".md", ".csv", ".json", ".tex"}
+
+
+def _extract_docx_text(raw_bytes: bytes) -> str:
+    """Trích xuất văn bản từ file .docx bằng stdlib zipfile + XML parser."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+            if "word/document.xml" not in zf.namelist():
+                raise ValueError("Thiếu word/document.xml")
+            xml_bytes = zf.read("word/document.xml")
+    except (zipfile.BadZipFile, ValueError, KeyError):
+        raise HTTPException(
+            status_code=422,
+            detail="Tệp .docx không hợp lệ hoặc bị hỏng. Vui lòng thử lại.",
+        )
+
+    root = ET.fromstring(xml_bytes)
+    paragraphs: list[str] = []
+    for elem in root.iter():
+        if elem.tag.endswith("}p") or elem.tag == "p":
+            texts = [
+                sub.text
+                for sub in elem.iter()
+                if (sub.tag.endswith("}t") or sub.tag == "t") and sub.text
+            ]
+            line = "".join(texts).strip()
+            if line:
+                paragraphs.append(line)
+    return "\n".join(paragraphs)
+
+
+def _normalize_doc_text(raw: str) -> str:
+    collapsed = re.sub(r"\n{3,}", "\n\n", raw).strip()
+    return collapsed[:_MAX_EXTRACTED_CHARS]
+
+
+@router.post("/extract-file", response_model=FileExtractResponse)
+async def extract_quiz_reference_file(file: UploadFile = File(...)):
+    """Đọc nội dung chữ từ tài liệu học tập (.txt, .md, .docx, .pdf, .csv, .json) để tạo Quiz AI."""
+    filename = (file.filename or "tai-lieu.txt").strip()
+    ext = Path(filename).suffix.lower()
+    if ext not in _TEXT_DOC_EXTS and ext not in {".docx", ".pdf"}:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Định dạng '{ext or 'không rõ'}' chưa hỗ trợ. "
+                "Hỗ trợ: .txt, .md, .docx, .pdf, .csv, .json"
+            ),
+        )
+
+    raw_bytes = await file.read()
+    if len(raw_bytes) == 0:
+        raise HTTPException(status_code=422, detail="Tệp tài liệu rỗng.")
+    if len(raw_bytes) > _MAX_DOC_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Tệp tài liệu vượt quá 10 MB ({len(raw_bytes) / 1024 / 1024:.1f} MB).",
+        )
+
+    if ext in _TEXT_DOC_EXTS:
+        raw_text = raw_bytes.decode("utf-8", errors="replace")
+    elif ext == ".docx":
+        raw_text = _extract_docx_text(raw_bytes)
+    else:
+        raw_text = await llm_service.extract_pdf_text_with_gemini(raw_bytes)
+
+    extracted = _normalize_doc_text(raw_text)
+    if not extracted:
+        raise HTTPException(
+            status_code=422,
+            detail="Không trích xuất được nội dung chữ từ tệp này. Hãy thử tệp khác hoặc dán nội dung trực tiếp.",
+        )
+
+    suggested_topic = re.sub(r"[_-]+", " ", Path(filename).stem).strip() or "Tài liệu học tập"
+    return FileExtractResponse(
+        filename=filename,
+        extracted_text=extracted,
+        char_count=len(extracted),
+        suggested_topic=suggested_topic,
+    )
 
 
 @router.post("/generate", response_model=QuizGenerateResponse)

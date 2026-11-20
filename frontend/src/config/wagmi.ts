@@ -1,11 +1,17 @@
 import { http, createConfig } from "wagmi";
 import { avalancheFuji } from "wagmi/chains";
-import { injected } from "wagmi/connectors";
+import { injected, metaMask } from "wagmi/connectors";
 
 export const config = createConfig({
   chains: [avalancheFuji],
   connectors: [
-    injected(), // Tự động nhận diện Core Wallet, MetaMask hoặc bất kỳ ví Web3 nào (EIP-6963 & EIP-1193)
+    metaMask({
+      dappMetadata: {
+        name: "MindSpark",
+        url: "http://localhost:3000",
+      },
+    }),
+    injected(),
   ],
   transports: {
     [avalancheFuji.id]: http("https://api.avax-test.network/ext/bc/C/rpc"),
@@ -15,9 +21,9 @@ export const config = createConfig({
 
 export const CONTRACTS = {
   VAULT: (process.env.NEXT_PUBLIC_VAULT_ADDRESS ||
-    "0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223") as `0x${string}`,
+    "0xB4B96B56E7b86ed7484Fe26919c509E14E6fb111") as `0x${string}`,
   SBT: (process.env.NEXT_PUBLIC_SBT_ADDRESS ||
-    "0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86") as `0x${string}`,
+    "0x9D3756BeE86E9FF34773B4D3f9E323FfdD8F3afA") as `0x${string}`,
   X402: (process.env.NEXT_PUBLIC_X402_ADDRESS ||
-    "0x143B9679eE996F1565654a1833709AB84B7Eea3C") as `0x${string}`,
+    "0x25e95555fed513Cb0d5a4Cb9FA0e2A698F5ED9eE") as `0x${string}`,
 };

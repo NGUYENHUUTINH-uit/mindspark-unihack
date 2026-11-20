@@ -2,9 +2,9 @@ name: MindSpark CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, dev, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, dev, develop ]
 
 jobs:
   test-smart-contracts:
@@ -34,3 +34,55 @@ jobs:
           FUJI_PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
           ORACLE_PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
         run: npx hardhat test
+
+  test-ai-service:
+    name: Test AI Service (FastAPI / Feynman & Quiz)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Dependencies
+        working-directory: ./ai-service
+        run: pip install -r requirements.txt
+
+      - name: Run AI Service Unit & Integration Tests
+        working-directory: ./ai-service
+        env:
+          GROQ_API_KEY: "test_groq_key"
+          GEMINI_API_KEY: "test_gemini_key"
+          ORACLE_MOCK: "true"
+        run: pytest tests/ -v
+
+  build-frontend:
+    name: Typecheck & Build Next.js Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build Next.js Production Bundle
+        working-directory: ./frontend
+        env:
+          NEXT_PUBLIC_VAULT_ADDRESS: "0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223"
+          NEXT_PUBLIC_SBT_ADDRESS: "0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86"
+          NEXT_PUBLIC_X402_ADDRESS: "0x143B9679eE996F1565654a1833709AB84B7Eea3C"
+          NEXT_PUBLIC_API_GATEWAY_URL: "http://localhost:4020"
+          NEXT_PUBLIC_AI_SERVICE_URL: "http://localhost:8000"
+        run: npm run build

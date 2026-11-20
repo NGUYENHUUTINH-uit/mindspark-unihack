@@ -333,3 +333,245 @@ def test_api_evaluate_duplicate_session_raises_409(client):
         assert res2.status_code == 409
         assert "đã nhận proof" in res2.json()["detail"]
 
+
+# ---------------------------------------------------------------------------
+# Unit tests cho POST /api/copilot/ask (x402 AI Socratic Copilot)
+# ---------------------------------------------------------------------------
+
+def test_api_copilot_ask_unauthorized(client):
+    """Thiếu hoặc sai header x-oracle-auth -> trả HTTP 401."""
+    res_missing = client.post(
+        "/api/copilot/ask",
+        json={"question": "Avalanche consensus hoạt động như thế nào?"},
+    )
+    assert res_missing.status_code == 401
+
+    res_wrong = client.post(
+        "/api/copilot/ask",
+        headers={"x-oracle-auth": "wrong-secret"},
+        json={"question": "Avalanche consensus hoạt động như thế nào?"},
+    )
+    assert res_wrong.status_code == 401
+
+
+def test_api_copilot_ask_success(client):
+    """Header x-oracle-auth hợp lệ -> gọi LLM và trả về topic, answer, flashcard."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    mock_copilot_result = {
+        "topic": "Avalanche Consensus",
+        "answer": "Avalanche dùng cơ chế lấy mẫu ngẫu nhiên lặp (repeated sub-sampling) để đạt finality dưới 1 giây.",
+        "flashcard": {
+            "question": "Snowman consensus khác gì Nakamoto consensus?",
+            "answer": "Snowman đạt finality tất định dưới 1s qua sub-sampling thay vì chờ nhiều block xác nhận.",
+        },
+    }
+
+    with patch("app.routers.copilot.llm_service.answer_copilot", AsyncMock(return_value=mock_copilot_result)):
+        res = client.post(
+            "/api/copilot/ask",
+            headers={"x-oracle-auth": settings.oracle_api_key},
+            json={"question": "Avalanche consensus hoạt động ra sao?"},
+        )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["topic"] == "Avalanche Consensus"
+    assert "finality" in data["answer"]
+    assert data["flashcard"]["question"] == mock_copilot_result["flashcard"]["question"]
+    assert data["flashcard"]["answer"] == mock_copilot_result["flashcard"]["answer"]
+
+
+# ---------------------------------------------------------------------------
+# Unit tests cho luồng 2 bước: /transcribe & /evaluate-text + lọc ảo giác im lặng
+# ---------------------------------------------------------------------------
+
+def test_clean_whisper_silence_hallucination():
+    """Các câu ảo giác khi file audio im lặng (Thank you / YouTube outro Tiếng Việt) phải trả về rỗng."""
+    from app.services import stt as stt_mod
+
+    assert stt_mod._clean_whisper_transcript("Thank you.") == ""
+    assert stt_mod._clean_whisper_transcript("  thanks for watching! ") == ""
+    assert (
+        stt_mod._clean_whisper_transcript(
+            "Các bạn hãy đăng kí cho kênh lalaschool Để không bỏ lỡ những video hấp dẫn"
+        )
+        == ""
+    )
+    assert (
+        stt_mod._clean_whisper_transcript("Giải thuật tìm kiếm nhị phân chia đôi mảng.")
+        == "Giải thuật tìm kiếm nhị phân chia đôi mảng."
+    )
+
+
+def test_api_transcribe_happy_path_and_empty(client):
+    """POST /api/feynman/transcribe trả transcript + word_count + likely_silence."""
+    mock_text = "Cây nhị phân tìm kiếm cho phép tra cứu với độ phức tạp trung bình log n"
+    with patch("app.routers.feynman.stt_service.transcribe", AsyncMock(return_value=mock_text)):
+        res = client.post(
+            "/api/feynman/transcribe",
+            data={"topic": "Cây nhị phân"},
+            files={"audio": ("voice.webm", io.BytesIO(b"fake webm bytes"), "audio/webm")},
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["transcript"] == mock_text
+    assert body["word_count"] == len(mock_text.split())
+    assert body["likely_silence"] is False
+
+    # Audio rỗng -> 422
+    res_empty = client.post(
+        "/api/feynman/transcribe",
+        files={"audio": ("empty.webm", io.BytesIO(b""), "audio/webm")},
+    )
+    assert res_empty.status_code == 422
+
+
+def test_api_evaluate_text_flow(client):
+    """POST /api/feynman/evaluate-text chấm transcript đã duyệt: đạt, ngắn, nói nhảm, trùng session, ví lỗi."""
+    valid_wallet = "0x71C84517C37400E01f37500A405A429b62F34008"
+    long_text = (
+        "Trong giải thuật sắp xếp nhanh Quicksort ta chọn phần tử chốt pivot "
+        "rồi chia mảng thành hai nửa nhỏ hơn và lớn hơn pivot để đệ quy."
+    )
+    mock_ok = FeynmanEvalResult(
+        score=8.5,
+        feedback="Giải thích rất rõ bản chất chia để trị của Quicksort.",
+        is_gibberish=False,
+        flashcards=[{"question": "Pivot là gì?", "answer": "Phần tử chốt dùng để phân hoạch mảng."}],
+    )
+
+    with patch("app.routers.feynman.llm_service.evaluate_feynman", AsyncMock(return_value=mock_ok)):
+        res = client.post(
+            "/api/feynman/evaluate-text",
+            json={
+                "transcript": long_text,
+                "wallet_address": valid_wallet,
+                "session_id": "sess-text-1",
+                "minutes_studied": 30,
+                "topic": "Quicksort",
+            },
+        )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["passed"] is True
+    assert data["proof"]["feynmanScore"] == 92
+
+    # Gọi lại cùng session_id -> 409 Conflict
+    res_dup = client.post(
+        "/api/feynman/evaluate-text",
+        json={
+            "transcript": long_text,
+            "wallet_address": valid_wallet,
+            "session_id": "sess-text-1",
+            "minutes_studied": 30,
+            "topic": "Quicksort",
+        },
+    )
+    assert res_dup.status_code == 409
+
+    # Quá ngắn (< 15 từ) -> passed=False
+    with patch("app.routers.feynman.llm_service.evaluate_feynman", AsyncMock(return_value=mock_ok)):
+        res_short = client.post(
+            "/api/feynman/evaluate-text",
+            json={
+                "transcript": "Quicksort rất nhanh và hiệu quả.",
+                "wallet_address": valid_wallet,
+                "session_id": "sess-text-short",
+                "minutes_studied": 30,
+                "topic": "Quicksort",
+            },
+        )
+    assert res_short.status_code == 200
+    assert res_short.json()["passed"] is False
+    assert res_short.json()["proof"] is None
+
+    # Nói nhảm -> passed=False
+    mock_gib = FeynmanEvalResult(score=1.5, feedback="Lạc đề.", is_gibberish=True, flashcards=[])
+    with patch("app.routers.feynman.llm_service.evaluate_feynman", AsyncMock(return_value=mock_gib)):
+        res_gib = client.post(
+            "/api/feynman/evaluate-text",
+            json={
+                "transcript": "một hai ba bốn năm sáu bảy tám chín mười mười một mười hai mười ba mười bốn mười lăm",
+                "wallet_address": valid_wallet,
+                "session_id": "sess-text-gib",
+                "minutes_studied": 30,
+                "topic": "Quicksort",
+            },
+        )
+    assert res_gib.status_code == 200
+    assert res_gib.json()["passed"] is False
+
+    # Ví không hợp lệ -> 422
+    res_bad_wallet = client.post(
+        "/api/feynman/evaluate-text",
+        json={
+            "transcript": long_text,
+            "wallet_address": "not-an-address",
+            "session_id": "sess-text-bad",
+            "minutes_studied": 30,
+            "topic": "Quicksort",
+        },
+    )
+    assert res_bad_wallet.status_code == 422
+
+
+def test_api_quiz_extract_file_txt_docx_and_errors(client):
+    """POST /api/quiz/extract-file hỗ trợ .txt, .docx, từ chối định dạng lạ và file rỗng."""
+    import zipfile
+
+    # 1. File .txt tiếng Việt
+    txt_bytes = "Chương 1: Đồng thuận Avalanche\nSnowman giúp đạt finality dưới 1 giây.".encode("utf-8")
+    res_txt = client.post(
+        "/api/quiz/extract-file",
+        files={"file": ("on-tap_chuong-1.txt", io.BytesIO(txt_bytes), "text/plain")},
+    )
+    assert res_txt.status_code == 200
+    body_txt = res_txt.json()
+    assert "Snowman" in body_txt["extracted_text"]
+    assert body_txt["suggested_topic"] == "on tap chuong 1"
+
+    # 2. File .docx hợp lệ tạo in-memory bằng zipfile
+    docx_buf = io.BytesIO()
+    doc_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Bài giảng Kinh tế vĩ mô: Lạm phát và Lãi suất.</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    with zipfile.ZipFile(docx_buf, "w") as zf:
+        zf.writestr("word/document.xml", doc_xml.encode("utf-8"))
+    docx_buf.seek(0)
+
+    res_docx = client.post(
+        "/api/quiz/extract-file",
+        files={
+            "file": (
+                "Kinh_te_vi_mo.docx",
+                docx_buf,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert res_docx.status_code == 200
+    assert "Lạm phát" in res_docx.json()["extracted_text"]
+    assert res_docx.json()["suggested_topic"] == "Kinh te vi mo"
+
+    # 3. Định dạng không hỗ trợ -> 422
+    res_bad_ext = client.post(
+        "/api/quiz/extract-file",
+        files={"file": ("malware.exe", io.BytesIO(b"MZ"), "application/octet-stream")},
+    )
+    assert res_bad_ext.status_code == 422
+
+    # 4. File rỗng -> 422
+    res_empty = client.post(
+        "/api/quiz/extract-file",
+        files={"file": ("empty.txt", io.BytesIO(b""), "text/plain")},
+    )
+    assert res_empty.status_code == 422
+
+
+
+

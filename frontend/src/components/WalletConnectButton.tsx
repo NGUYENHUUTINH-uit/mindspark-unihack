@@ -170,24 +170,24 @@ export function WalletConnectButton() {
 
                   <div className="flex flex-col gap-2 pt-1">
                     <a
-                      href="https://metamask.io/download/"
+                      href="https://chromewebstore.google.com/detail/core-crypto-wallet-nft-e/agoakfejjabomempkjlepdfladaackdn"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-between text-xs bg-red-950/40 hover:bg-red-900/50 p-3 rounded-lg border border-red-800/60 text-slate-100 transition-colors"
+                    >
+                      <span className="flex items-center gap-2 font-medium">
+                        🔴 Cài đặt Core Extension (Chrome Web Store)
+                      </span>
+                      <ExternalLink className="w-3.5 h-3.5 text-red-400" />
+                    </a>
+                    <a
+                      href="https://chromewebstore.google.com/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center justify-between text-xs bg-slate-900 hover:bg-slate-800 p-3 rounded-lg border border-slate-800 text-slate-200 transition-colors"
                     >
                       <span className="flex items-center gap-2 font-medium">
                         🦊 Cài đặt MetaMask Extension
-                      </span>
-                      <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                    </a>
-                    <a
-                      href="https://core.app/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center justify-between text-xs bg-slate-900 hover:bg-slate-800 p-3 rounded-lg border border-slate-800 text-slate-200 transition-colors"
-                    >
-                      <span className="flex items-center gap-2 font-medium">
-                        🔴 Cài đặt Avalanche Core Wallet
                       </span>
                       <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
                     </a>

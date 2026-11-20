@@ -1,19 +1,33 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   useAccount,
   useWriteContract,
   useReadContract,
   useSwitchChain,
+  usePublicClient,
 } from "wagmi";
 import { parseEther } from "viem";
 import { avalancheFuji } from "wagmi/chains";
 import { CONTRACTS } from "@/config/wagmi";
 import { VAULT_ABI, SBT_ABI } from "@/config/abis";
 import { WalletConnectButton } from "@/components/WalletConnectButton";
-import { FlashcardNotebook } from "@/components/FlashcardNotebook";
-import { ResultModal } from "@/components/ResultModal";
+import {
+  FlashcardNotebook,
+  DEFAULT_FLASHCARDS,
+  type NotebookFlashcard,
+} from "@/components/FlashcardNotebook";
+import {
+  ResultModal,
+  type SessionResultData,
+} from "@/components/ResultModal";
+import {
+  QuizModal,
+  type QuizCompletionPayload,
+  type QuizFlashcard,
+} from "@/components/QuizModal";
+import { usePoseTracker, type StudyPose } from "@/hooks/usePoseTracker";
 import {
   Minus,
   Plus,
@@ -43,18 +57,23 @@ import {
   Users,
   UserCheck,
   Flame,
-  Radio,
   Cpu,
   Activity,
   AlertTriangle,
+  Gift,
+  CheckCircle2,
+  Loader2,
+  PauseCircle,
+  Play,
+  Maximize2,
+  Minimize2,
+  Coffee,
+  RotateCcw,
+  Send,
+  Check,
 } from "lucide-react";
 
 type ActiveSpace = "focus" | "sanctuary" | "notebook";
-type StudyPose =
-  | "Writing Pose"
-  | "Reading Pose"
-  | "Screen Focus"
-  | "Phone Distraction";
 type SoundTrackId = "off" | "rain" | "lofi" | "ocean" | "fire";
 
 const SOUND_TRACKS: { id: SoundTrackId; label: string; emoji: string }[] = [
@@ -65,8 +84,46 @@ const SOUND_TRACKS: { id: SoundTrackId; label: string; emoji: string }[] = [
   { id: "fire", label: "Lửa trại ấm", emoji: "🔥" },
 ];
 
+const TOPIC_PRESETS = [
+  "Cấu trúc dữ liệu & Giải thuật",
+  "Machine Learning cơ bản",
+  "Kinh tế vi mô",
+  "Avalanche Consensus & Subnets",
+];
+
+const REWARD_MARKETPLACE = [
+  {
+    id: "rw-1",
+    title: "Voucher Khóa học Avalanche Builders",
+    sponsor: "Avalanche Academy",
+    requiredLevel: 1,
+    pointsCost: "Lv.1 • 30p+",
+    code: "AVAX-BUILD-2026",
+  },
+  {
+    id: "rw-2",
+    title: "Gói 20 lượt AI Socratic Copilot",
+    sponsor: "MindSpark Guild",
+    requiredLevel: 2,
+    pointsCost: "Lv.2 • 300p+",
+    code: "MINDSPARK-PRO-X402",
+  },
+  {
+    id: "rw-3",
+    title: "Học bổng Hackathon Cloud Credits (\$50)",
+    sponsor: "Sponsor Bounty Pool",
+    requiredLevel: 3,
+    pointsCost: "Lv.3 • 900p+",
+    code: "UNIHACK-SCHOLAR-50",
+  },
+];
+
+const FLASHCARDS_STORAGE_KEY = "mindspark_flashcards_v1";
+const REDEEMED_STORAGE_KEY = "mindspark_redeemed_rewards_v1";
+
 export default function MindSparkInteractiveStudio() {
   const { address, isConnected, chainId } = useAccount();
+  const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const { switchChainAsync } = useSwitchChain();
 
@@ -75,47 +132,169 @@ export default function MindSparkInteractiveStudio() {
   const [activeSpace, setActiveSpace] = useState<ActiveSpace>("focus");
   const [showGuideModal, setShowGuideModal] = useState(false);
 
-  // Chế độ học Cá nhân / Nhóm
+  // Chế độ học Cá nhân / Nhóm & Chủ đề học tập (để trống cho người dùng tự nhập)
   const [studyMode, setStudyMode] = useState<"solo" | "group">("solo");
+  const [studyTopic, setStudyTopic] = useState("");
 
-  // Trạng thái Pomodoro
+  // Trạng thái Pomodoro & Bảng chọn phương thức đánh giá sau phiên học
   const [studyMinutes, setStudyMinutes] = useState(45);
   const [breakMinutes, setBreakMinutes] = useState(5);
   const [secondsLeft, setSecondsLeft] = useState(45 * 60);
   const [isStudying, setIsStudying] = useState(false);
+  const [isStakingTx, setIsStakingTx] = useState(false);
+  const [showAssessmentChoice, setShowAssessmentChoice] = useState(false);
+  const [breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null);
 
-  // Edge-AI Pose & Focus Index (%)
+  // Edge-AI Studio Camera Monitor
   const [showCameraPip, setShowCameraPip] = useState(true);
-  const [currentPose, setCurrentPose] = useState<StudyPose>("Writing Pose");
-  const [focusIndex, setFocusIndex] = useState(98);
-  const [isAutoDetect, setIsAutoDetect] = useState(true);
-  const [cameraStatus, setCameraStatus] = useState<"idle" | "active" | "error" | "blocked">("idle");
-  const [headTiltAngle, setHeadTiltAngle] = useState(28);
-  const [postureConfidence, setPostureConfidence] = useState(97);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lastImageDataRef = useRef<Uint8ClampedArray | null>(null);
+  const [cameraExpanded, setCameraExpanded] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Feynman 30s Voice Reflection & Audio Visualizer
+  // Feynman 30s Voice Reflection (2-bước: Transcribe -> Review & Grade) + Audio Visualizer
   const [isRecordingFeynman, setIsRecordingFeynman] = useState(false);
+  const [feynmanStep, setFeynmanStep] = useState<
+    "idle" | "recording" | "transcribing" | "review" | "grading"
+  >("idle");
   const [feynmanSeconds, setFeynmanSeconds] = useState(30);
-  const [audioLevels, setAudioLevels] = useState<number[]>([
-    20, 35, 50, 30, 60, 40, 25, 45, 55, 30, 40, 20,
-  ]);
+  const feynmanSecondsRef = useRef(30);
+  feynmanSecondsRef.current = feynmanSeconds;
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const recordedAudioUrlRef = useRef<string | null>(null);
+  const [editableTranscript, setEditableTranscript] = useState("");
+  const [micStatus, setMicStatus] = useState<"idle" | "listening" | "quiet" | "error">("idle");
+  const [feynmanNotice, setFeynmanNotice] = useState("");
+  const [audioLevels, setAudioLevels] = useState<number[]>(Array(20).fill(15));
 
-  // Dữ liệu On-chain & Modal
+  // Quiz Mode B Modal
+  const [quizModalOpen, setQuizModalOpen] = useState(false);
+
+  // Dữ liệu On-chain, Flashcards & ResultModal
   const [bountyPool, setBountyPool] = useState("0.0000");
   const [modalOpen, setModalOpen] = useState(false);
-  const [sessionResult, setSessionResult] = useState<any>(null);
+  const [sessionResult, setSessionResult] = useState<SessionResultData | null>(null);
+  const [flashcards, setFlashcards] = useState<NotebookFlashcard[]>(DEFAULT_FLASHCARDS);
+  const [redeemedRewards, setRedeemedRewards] = useState<string[]>([]);
 
   // Trình phát nhạc nhiều bản nhạc (Web Audio Synthesizer)
   const [currentTrack, setCurrentTrack] = useState<SoundTrackId>("off");
   const [showSoundMenu, setShowSoundMenu] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const intervalMusicRef = useRef<NodeJS.Timeout | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  // Âm thanh chuông thông báo bằng Web Audio API (MU-21, MU-25)
+  const playTone = useCallback((freq: number, durationMs: number, type: OscillatorType = "sine") => {
+    if (typeof window === "undefined") return;
+    try {
+      const AudioContextClass =
+        window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + durationMs / 1000 + 0.05);
+      setTimeout(() => ctx.close().catch(() => {}), durationMs + 150);
+    } catch {
+      // Bỏ qua nếu trình duyệt chặn autoplay audio
+    }
+  }, []);
+
+  const handleAlertBeep = useCallback(
+    (reason: "phone" | "absent") => {
+      if (reason === "phone") {
+        playTone(880, 180, "triangle");
+        setTimeout(() => playTone(660, 220, "triangle"), 200);
+      } else {
+        playTone(520, 280, "sine");
+      }
+    },
+    [playTone],
+  );
+
+  const playPomodoroEndChime = useCallback(() => {
+    playTone(523.25, 200, "sine"); // C5
+    setTimeout(() => playTone(659.25, 220, "sine"), 180); // E5
+    setTimeout(() => playTone(783.99, 360, "sine"), 360); // G5
+  }, [playTone]);
+
+  // Hook Edge-AI Computer Vision (MU-12, MU-13, MU-15, MU-17)
+  const {
+    currentPose,
+    focusIndex,
+    setFocusIndex,
+    isAutoDetect,
+    setIsAutoDetect,
+    cameraStatus,
+    headTiltAngle,
+    postureConfidence,
+    isLiveSubject,
+    livenessScore,
+    blinkCount,
+    visionEngine,
+    hasPhoneDetector,
+    distractionSeconds,
+    absenceSeconds,
+    isDistractionAlert,
+    isPausedByAi,
+    selectManualPose,
+    resetTracker,
+  } = usePoseTracker({
+    videoRef,
+    isStudying,
+    showCameraPip,
+    distractionThresholdSec: 5,
+    absenceThresholdSec: 5,
+    onAlertBeep: handleAlertBeep,
+  });
+
+  // Load & Persist Flashcards + Redeemed Rewards từ localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(FLASHCARDS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) setFlashcards(parsed);
+      }
+      const savedRewards = localStorage.getItem(REDEEMED_STORAGE_KEY);
+      if (savedRewards) {
+        const parsedRewards = JSON.parse(savedRewards);
+        if (Array.isArray(parsedRewards)) setRedeemedRewards(parsedRewards);
+      }
+    } catch {
+      // Dùng mặc định nếu localStorage không khả dụng
+    }
+  }, []);
+
+  const appendFlashcards = useCallback((newCards: QuizFlashcard[] | Omit<NotebookFlashcard, "id">[]) => {
+    if (!newCards || newCards.length === 0) return;
+    setFlashcards((prev) => {
+      const now = Date.now();
+      const mapped: NotebookFlashcard[] = newCards.map((c, idx) => ({
+        id: now + idx,
+        tag: c.tag || "AI Generated",
+        front: c.front,
+        back: c.back,
+      }));
+      // Tránh trùng lặp y hệt mặt trước
+      const existingFronts = new Set(prev.map((p) => p.front.trim()));
+      const filtered = mapped.filter((m) => !existingFronts.has(m.front.trim()));
+      const updated = [...filtered, ...prev];
+      try {
+        localStorage.setItem(FLASHCARDS_STORAGE_KEY, JSON.stringify(updated));
+      } catch {
+        // Bỏ qua nếu đầy bộ nhớ trình duyệt
+      }
+      return updated;
+    });
+  }, []);
 
   // Danh sách bạn bè học chung trong phòng (Study Guild)
   const groupPeers = [
@@ -151,20 +330,50 @@ export default function MindSparkInteractiveStudio() {
     },
   ];
 
-  // Đọc dữ liệu Huy hiệu Soulbound NFT
-  const { data: badgeMetrics } = useReadContract({
+  // Đọc phiên Stake đang active của ví từ StudyStakeVault (tránh lỗi F5 rồi stake đè)
+  const { data: activeVaultSession, refetch: refetchVaultSession } = useReadContract({
+    address: CONTRACTS.VAULT,
+    abi: VAULT_ABI,
+    functionName: "userSessions",
+    args: [address ?? "0x0000000000000000000000000000000000000000"],
+    query: { enabled: Boolean(address) },
+  });
+
+  const hasActiveOnChainSession = Boolean(activeVaultSession && activeVaultSession[4]);
+  const onChainTargetMinutes = activeVaultSession ? Number(activeVaultSession[1]) : 30;
+
+  // Đọc Token ID SBT của sinh viên theo địa chỉ ví (nếu chưa mint -> fallback Token #1)
+  const { data: studentBadgeId, refetch: refetchStudentBadgeId } = useReadContract({
+    address: CONTRACTS.SBT,
+    abi: SBT_ABI,
+    functionName: "studentToBadgeId",
+    args: [address ?? "0x0000000000000000000000000000000000000000"],
+    query: { enabled: Boolean(address) },
+  });
+
+  const userHasPersonalBadge = Boolean(studentBadgeId && studentBadgeId > BigInt(0));
+  const queryBadgeId = userHasPersonalBadge ? studentBadgeId! : BigInt(1);
+
+  const { data: badgeMetrics, refetch: refetchBadgeMetrics } = useReadContract({
     address: CONTRACTS.SBT,
     abi: SBT_ABI,
     functionName: "badgeMetrics",
-    args: [BigInt(1)],
+    args: [queryBadgeId],
   });
 
-  const { data: tokenUri } = useReadContract({
+  const { data: tokenUri, refetch: refetchTokenUri } = useReadContract({
     address: CONTRACTS.SBT,
     abi: SBT_ABI,
     functionName: "tokenURI",
-    args: [BigInt(1)],
+    args: [queryBadgeId],
   });
+
+  const refreshOnChainState = useCallback(() => {
+    refetchVaultSession();
+    refetchStudentBadgeId();
+    refetchBadgeMetrics();
+    refetchTokenUri();
+  }, [refetchVaultSession, refetchStudentBadgeId, refetchBadgeMetrics, refetchTokenUri]);
 
   const decodeSbtImage = () => {
     if (!tokenUri || typeof tokenUri !== "string") return null;
@@ -178,6 +387,7 @@ export default function MindSparkInteractiveStudio() {
   };
   const sbtSvgImage = decodeSbtImage();
 
+  // Lấy số dư quỹ x402 Bounty Pool từ API Gateway
   useEffect(() => {
     const gatewayUrl =
       process.env.NEXT_PUBLIC_API_GATEWAY_URL || "http://localhost:4020";
@@ -191,7 +401,6 @@ export default function MindSparkInteractiveStudio() {
 
   // Bộ phát 4 bản nhạc thư giãn bằng Web Audio API
   const selectSoundTrack = (trackId: SoundTrackId) => {
-    // Dọn dẹp âm thanh cũ
     if (intervalMusicRef.current) {
       clearInterval(intervalMusicRef.current);
       intervalMusicRef.current = null;
@@ -212,7 +421,6 @@ export default function MindSparkInteractiveStudio() {
     audioCtxRef.current = ctx;
 
     if (trackId === "rain") {
-      // Tiếng mưa rơi dịu (Brown Noise)
       const bufferSize = 4096;
       let lastOut = 0.0;
       const node = ctx.createScriptProcessor(bufferSize, 1, 1);
@@ -227,7 +435,6 @@ export default function MindSparkInteractiveStudio() {
       };
       node.connect(ctx.destination);
     } else if (trackId === "ocean") {
-      // Tiếng sóng biển dập dìu (Modulated Pink/Brown Noise)
       const bufferSize = 4096;
       let lastOut = 0.0;
       let phase = 0;
@@ -245,7 +452,6 @@ export default function MindSparkInteractiveStudio() {
       };
       node.connect(ctx.destination);
     } else if (trackId === "fire") {
-      // Tiếng lửa trại ấm áp kèm tiếng tí tách nhẹ
       const bufferSize = 4096;
       let lastOut = 0.0;
       const node = ctx.createScriptProcessor(bufferSize, 1, 1);
@@ -261,206 +467,423 @@ export default function MindSparkInteractiveStudio() {
       };
       node.connect(ctx.destination);
     } else if (trackId === "lofi") {
-      // Hợp âm Lo-fi Chill (Fmaj7 -> Em7 -> Dm7 -> Cmaj7)
       const chords = [
-        [174.61, 220.0, 261.63, 329.63], // Fmaj7
-        [164.81, 196.0, 246.94, 293.66], // Em7
-        [146.83, 174.61, 220.0, 261.63], // Dm7
-        [130.81, 164.81, 196.0, 246.94], // Cmaj7
+        [174.61, 220.0, 261.63, 329.63],
+        [164.81, 196.0, 246.94, 293.66],
+        [146.83, 174.61, 220.0, 261.63],
+        [130.81, 164.81, 196.0, 246.94],
       ];
       let step = 0;
-
       const playChord = () => {
         if (!audioCtxRef.current) return;
         const now = ctx.currentTime;
         const freqs = chords[step % chords.length];
         step++;
-
         freqs.forEach((freq) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "sine";
           osc.frequency.setValueAtTime(freq, now);
-
           gain.gain.setValueAtTime(0.001, now);
           gain.gain.exponentialRampToValueAtTime(0.025, now + 0.6);
           gain.gain.exponentialRampToValueAtTime(0.0008, now + 3.8);
-
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
           osc.stop(now + 4.0);
         });
       };
-
       playChord();
       intervalMusicRef.current = setInterval(playChord, 4000);
     }
   };
 
-  // Webcam Edge-AI Supervisor
-  useEffect(() => {
-    if (isStudying && showCameraPip && navigator.mediaDevices?.getUserMedia) {
-      setCameraStatus("idle");
-      navigator.mediaDevices
-        .getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: "user",
-          },
-          audio: false,
-        })
-        .then((stream) => {
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            videoRef.current.onloadedmetadata = () => {
-              videoRef.current
-                ?.play()
-                .then(() => setCameraStatus("active"))
-                .catch(() => setCameraStatus("active"));
-            };
-          }
-        })
-        .catch((err) => {
-          console.warn("Không thể truy cập camera:", err);
-          setCameraStatus("error");
-        });
-    } else if (videoRef.current?.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach((track) => track.stop());
-      setCameraStatus("idle");
+  // Dừng MediaRecorder an toàn và đợi trả về Blob đầy đủ (tránh audio rỗng khi nộp sớm!)
+  const stopRecorderAndGetBlob = useCallback(async (): Promise<Blob> => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      await new Promise<void>((resolve) => {
+        const prevOnStop = recorder.onstop;
+        recorder.onstop = (ev) => {
+          if (prevOnStop) prevOnStop.call(recorder, ev);
+          resolve();
+        };
+        try {
+          recorder.requestData();
+        } catch {
+          // Một số trình duyệt không cần requestData
+        }
+        recorder.stop();
+        setTimeout(resolve, 450); // Timeout bảo vệ tối đa 450ms
+      });
     }
-  }, [isStudying, showCameraPip]);
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
+    }
+    const mimeType = recorder?.mimeType || "audio/webm";
+    return new Blob(audioChunksRef.current, { type: mimeType });
+  }, []);
 
-  // Vòng lặp Edge-AI: Phân tích khung hình camera theo thời gian thực (Real-Time Video Inference)
+  const replaceRecordedAudioUrl = useCallback((blob: Blob | null) => {
+    if (recordedAudioUrlRef.current) {
+      URL.revokeObjectURL(recordedAudioUrlRef.current);
+      recordedAudioUrlRef.current = null;
+    }
+    if (blob && blob.size > 0) {
+      const nextUrl = URL.createObjectURL(blob);
+      recordedAudioUrlRef.current = nextUrl;
+      setRecordedAudioUrl(nextUrl);
+    } else {
+      setRecordedAudioUrl(null);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!isStudying || !isAutoDetect || cameraStatus === "error") return;
-
-    const interval = setInterval(() => {
-      const video = videoRef.current;
-      if (!video || video.readyState < 2) return;
-
-      if (!canvasRef.current) {
-        canvasRef.current = document.createElement("canvas");
-        canvasRef.current.width = 160;
-        canvasRef.current.height = 120;
+    return () => {
+      if (recordedAudioUrlRef.current) {
+        URL.revokeObjectURL(recordedAudioUrlRef.current);
       }
+    };
+  }, []);
 
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return;
-
-      ctx.drawImage(video, 0, 0, 160, 120);
-      const imgData = ctx.getImageData(0, 0, 160, 120);
-      const data = imgData.data;
-
-      let totalBrightness = 0;
-      let skinPixels = 0;
-      let sumY = 0;
-      let lowerSkin = 0;
-
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const br = (r + g + b) / 3;
-        totalBrightness += br;
-
-        // Bộ lọc màu da tự nhiên
-        if (
-          r > 55 &&
-          g > 35 &&
-          b > 20 &&
-          r > g &&
-          r > b &&
-          Math.max(r, g, b) - Math.min(r, g, b) > 12
-        ) {
-          skinPixels++;
-          const y = Math.floor(i / 4 / 160);
-          sumY += y;
-          if (y > 65) lowerSkin++;
-        }
-      }
-
-      const avgBrightness = totalBrightness / (160 * 120);
-
-      // Nếu camera bị tối hoàn toàn (che cần gạt privacy shutter)
-      if (avgBrightness < 12) {
-        if (cameraStatus !== "blocked") setCameraStatus("blocked");
-        return;
-      } else if (cameraStatus === "blocked") {
-        setCameraStatus("active");
-      }
-
-      // Nhận diện biến thiên chuyển động (Motion Detection)
-      let motion = 0;
-      if (lastImageDataRef.current) {
-        const prev = lastImageDataRef.current;
-        for (let i = 0; i < data.length; i += 16) {
-          motion += Math.abs(data[i] - prev[i]);
-        }
-      }
-      lastImageDataRef.current = new Uint8ClampedArray(data);
-
-      if (skinPixels > 60) {
-        const centerY = sumY / skinPixels;
-        const tilt = Math.round(
-          Math.min(65, Math.max(12, (centerY / 120) * 70))
-        );
-        setHeadTiltAngle(tilt);
-
-        let newPose: StudyPose = currentPose;
-        let conf = 96;
-
-        // Bàn tay đưa lên cao nhiều kèm cử động nhanh gần ngực/mặt -> Cầm điện thoại
-        if (lowerSkin > skinPixels * 0.58 && motion > 40000) {
-          newPose = "Phone Distraction";
-          conf = 95;
-        } else if (centerY > 65) {
-          // Đầu cúi xuống bàn học tập
-          newPose = motion < 16000 ? "Writing Pose" : "Reading Pose";
-          conf = 98;
-        } else if (centerY >= 38 && centerY <= 65) {
-          // Nhìn thẳng màn hình
-          newPose = "Screen Focus";
-          conf = 97;
-        } else {
-          newPose = "Writing Pose";
-          conf = 93;
-        }
-
-        setPostureConfidence(conf);
-        setCurrentPose(newPose);
-      }
-    }, 750);
-
-    return () => clearInterval(interval);
-  }, [isStudying, isAutoDetect, cameraStatus, currentPose]);
-
-  // Đồng hồ đếm ngược Pomodoro
+  // Đồng hồ đếm ngược Pomodoro (Tự động tạm dừng khi isPausedByAi === true!)
   useEffect(() => {
     if (!isStudying) return;
     const timer = setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          setIsStudying(false);
-          setIsRecordingFeynman(true);
-          return 0;
-        }
-        return prev - 1;
-      });
+      if (!isPausedByAi) {
+        setSecondsLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            playPomodoroEndChime();
+            setIsStudying(false);
+            setShowAssessmentChoice(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
 
       setFocusIndex((prev) => {
-        if (currentPose === "Phone Distraction") return Math.max(40, prev - 2);
+        if (currentPose === "Phone Distraction" || currentPose === "Drowsy / Absent") {
+          return Math.max(40, prev - 2);
+        }
+        if (currentPose === "Thinking / Rest") return prev;
+        if (!isLiveSubject) return Math.max(50, prev - 1);
         return Math.min(100, prev + 1);
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [isStudying, currentPose]);
+  }, [isStudying, isPausedByAi, currentPose, isLiveSubject, setFocusIndex, playPomodoroEndChime]);
 
-  // Thu âm Micro & Sóng âm Visualizer cho Feynman 30s
+  // Đếm ngược nghỉ giải lao ngắn (nếu người dùng chọn nghỉ trước khi làm bài đánh giá)
+  useEffect(() => {
+    if (breakSecondsLeft === null || breakSecondsLeft <= 0) return;
+    const timer = setInterval(() => {
+      setBreakSecondsLeft((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          playPomodoroEndChime();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [breakSecondsLeft, playPomodoroEndChime]);
+
+  // Helper gọi Demo Fast-Track từ Gateway (chỉ khi bật ENABLE_DEMO_ATTEST=true)
+  const requestDemoAttestFromGateway = useCallback(async () => {
+    const gatewayUrl =
+      process.env.NEXT_PUBLIC_API_GATEWAY_URL || "http://localhost:4020";
+    const minutesToAttest = hasActiveOnChainSession
+      ? Math.max(30, onChainTargetMinutes)
+      : Math.max(30, studyMinutes);
+
+    const res = await fetch(`${gatewayUrl}/api/v1/oracle/demo-attest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        studentAddress: address || "0xA206B966480E6eeE2F3F96e6958899e71501B8e2",
+        completedMinutes: minutesToAttest,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.signature) {
+      alert(data.error || "Chế độ Demo Attest đang tắt trên Gateway.");
+      return;
+    }
+
+    setSessionResult({
+      passed: true,
+      actualMinutes: studyMinutes,
+      completedMinutes: minutesToAttest,
+      feynmanScore: data.feynmanScore || 75,
+      signature: data.signature,
+      aiFeedback: `Chế độ Demo Fast-Track (${studyMinutes} phút): Focus Index ${focusIndex}%. Oracle Gateway đã cấp chữ ký EIP-191 để test Claim on-chain.`,
+      didUserSpeak: false,
+      mode: "demo",
+      stakedAmount: "0.0100 AVAX",
+      vaultAddress: CONTRACTS.VAULT,
+    });
+  }, [address, focusIndex, hasActiveOnChainSession, onChainTargetMinutes, studyMinutes]);
+
+  const startFeynmanRecording = useCallback(() => {
+    setFeynmanNotice("");
+    replaceRecordedAudioUrl(null);
+    setEditableTranscript("");
+    setShowAssessmentChoice(false);
+    setBreakSecondsLeft(null);
+    setFeynmanSeconds(30);
+    setMicStatus("listening");
+    setFeynmanStep("recording");
+    setIsRecordingFeynman(true);
+  }, [replaceRecordedAudioUrl]);
+
+  const transcribingLockRef = useRef(false);
+
+  // Bước 1 Feynman Voice: Flush audio TRƯỚC khi tắt stream -> gọi /api/feynman/transcribe -> chuyển sang màn hình Review
+  const handleStopAndTranscribe = useCallback(async () => {
+    if (transcribingLockRef.current) return;
+    transcribingLockRef.current = true;
+    setFeynmanNotice("");
+
+    try {
+      // QUAN TRỌNG: Đợi flush blob xong TRƯỚC khi setIsRecordingFeynman(false) để tránh cleanup giết recorder sớm
+      const audioBlob = await stopRecorderAndGetBlob();
+      if (audioBlob.size > 0) {
+        replaceRecordedAudioUrl(audioBlob);
+      }
+      setIsRecordingFeynman(false);
+      setFeynmanSeconds(30);
+      setFeynmanStep("transcribing");
+
+      const didCaptureAudio = audioBlob.size > 1200;
+      if (!didCaptureAudio) {
+        setEditableTranscript("");
+        setFeynmanNotice(
+          "Chưa thu được đủ dữ liệu âm thanh từ Micro. Bạn có thể thu âm lại, gõ trực tiếp tóm tắt bên dưới, hoặc chuyển sang làm Quiz 5 câu."
+        );
+        setFeynmanStep("review");
+        return;
+      }
+
+      const aiServiceUrl =
+        process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8000";
+      const mime = audioBlob.type || "audio/webm";
+      const ext = mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : "webm";
+
+      const formData = new FormData();
+      formData.append("audio", audioBlob, `feynman_reflection.${ext}`);
+      if (studyTopic.trim()) {
+        formData.append("topic", studyTopic.trim());
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
+      try {
+        const res = await fetch(`${aiServiceUrl}/api/feynman/transcribe`, {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          const text = (data.transcript || "").trim();
+          setEditableTranscript(text);
+          if (data.likely_silence || !text) {
+            setFeynmanNotice(
+              "Micro chưa bắt được tiếng rõ (hệ thống nhận diện im lặng). Bạn có thể nghe lại file bên trên, thu âm lại gần micro hơn, gõ tóm tắt trực tiếp, hoặc làm Quiz 5 câu."
+            );
+          }
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          setEditableTranscript("");
+          setFeynmanNotice(
+            errJson.detail ||
+              "Dịch vụ nhận dạng giọng nói tạm thời bận. Bạn có thể gõ tóm tắt trực tiếp bên dưới hoặc chuyển sang làm Quiz 5 câu."
+          );
+        }
+      } catch {
+        clearTimeout(timeoutId);
+        setEditableTranscript("");
+        setFeynmanNotice(
+          "Không thể kết nối AI Speech-to-Text (cổng 8000). Bạn có thể gõ tóm tắt bên dưới để AI chấm hoặc chuyển sang làm Quiz 5 câu!"
+        );
+      }
+
+      setFeynmanStep("review");
+    } finally {
+      transcribingLockRef.current = false;
+    }
+  }, [stopRecorderAndGetBlob, replaceRecordedAudioUrl, studyTopic]);
+
+  const handleStopAndTranscribeRef = useRef(handleStopAndTranscribe);
+  handleStopAndTranscribeRef.current = handleStopAndTranscribe;
+
+  // Bước 2 Feynman Voice: Chấm điểm bản transcript đã xem/sửa qua POST /api/feynman/evaluate-text
+  const handleEvaluateTranscript = useCallback(async () => {
+    const cleanText = editableTranscript.trim();
+    if (!cleanText || feynmanStep === "grading") return;
+
+    setFeynmanStep("grading");
+    setFeynmanNotice("");
+
+    const aiServiceUrl =
+      process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8000";
+    const gatewayUrl =
+      process.env.NEXT_PUBLIC_API_GATEWAY_URL || "http://localhost:4020";
+    const minutesToAttest = hasActiveOnChainSession
+      ? Math.max(30, onChainTargetMinutes)
+      : Math.max(30, studyMinutes);
+
+    let nextResult: SessionResultData | null = null;
+    let aiOffline = false;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
+
+    try {
+      const res = await fetch(`${aiServiceUrl}/api/feynman/evaluate-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: cleanText,
+          wallet_address: address || "0xA206B966480E6eeE2F3F96e6958899e71501B8e2",
+          session_id: `sess_${Date.now()}`,
+          minutes_studied: minutesToAttest,
+          topic: studyTopic.trim() || "Kiến thức tổng hợp phiên học",
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const aiData = await res.json();
+        const generatedCards: QuizFlashcard[] = (aiData.flashcards || []).map((fc: any) => ({
+          tag: "Feynman 30s • AI",
+          front: fc.question,
+          back: fc.answer,
+        }));
+        if (generatedCards.length > 0) {
+          appendFlashcards(generatedCards);
+        }
+
+        if (aiData.passed && aiData.proof?.signature) {
+          nextResult = {
+            passed: true,
+            actualMinutes: studyMinutes,
+            completedMinutes: aiData.proof.completedMinutes || minutesToAttest,
+            feynmanScore: aiData.proof.feynmanScore || 85,
+            llmScore: aiData.score,
+            signature: aiData.proof.signature,
+            aiFeedback: aiData.feedback,
+            transcript: aiData.transcript,
+            flashcards: generatedCards,
+            didUserSpeak: true,
+            mode: "voice",
+            oracleMock: Boolean(aiData.proof.mock),
+            stakedAmount: "0.0100 AVAX",
+            vaultAddress: CONTRACTS.VAULT,
+          };
+        } else {
+          nextResult = {
+            passed: false,
+            actualMinutes: studyMinutes,
+            completedMinutes: minutesToAttest,
+            feynmanScore: 0,
+            llmScore: aiData.score ?? 1,
+            aiFeedback:
+              aiData.feedback ||
+              "Nội dung chưa đạt 15 từ hoặc chưa giải thích rõ trọng tâm chủ đề.",
+            transcript: aiData.transcript,
+            flashcards: generatedCards,
+            didUserSpeak: true,
+            mode: "voice",
+          };
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        aiOffline = res.status >= 500;
+        nextResult = {
+          passed: false,
+          actualMinutes: studyMinutes,
+          completedMinutes: minutesToAttest,
+          feynmanScore: 0,
+          aiFeedback: errJson.detail || `AI Service trả lỗi HTTP ${res.status}.`,
+          transcript: cleanText,
+          didUserSpeak: true,
+          mode: "voice",
+        };
+      }
+    } catch {
+      clearTimeout(timeoutId);
+      aiOffline = true;
+    }
+
+    if (!nextResult && aiOffline) {
+      try {
+        const demoRes = await fetch(`${gatewayUrl}/api/v1/oracle/demo-attest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentAddress: address || "0xA206B966480E6eeE2F3F96e6958899e71501B8e2",
+            completedMinutes: minutesToAttest,
+          }),
+        });
+        if (demoRes.ok) {
+          const demoData = await demoRes.json();
+          nextResult = {
+            passed: true,
+            actualMinutes: studyMinutes,
+            completedMinutes: minutesToAttest,
+            feynmanScore: demoData.feynmanScore || 75,
+            signature: demoData.signature,
+            aiFeedback: `AI Service tạm gián đoạn (${studyMinutes} phút). Gateway Demo Attest đã ký xác thực dự phòng để tiếp tục demo.`,
+            transcript: cleanText,
+            didUserSpeak: true,
+            mode: "demo",
+            stakedAmount: "0.0100 AVAX",
+            vaultAddress: CONTRACTS.VAULT,
+          };
+        }
+      } catch {
+        // Gateway cũng không bật demo-attest
+      }
+    }
+
+    if (!nextResult) {
+      nextResult = {
+        passed: false,
+        actualMinutes: studyMinutes,
+        completedMinutes: minutesToAttest,
+        feynmanScore: 0,
+        transcript: cleanText,
+        aiFeedback:
+          "AI Service (cổng 8000) phản hồi chậm hoặc đang ngoại tuyến. Bạn có thể thử gửi chấm lại hoặc chuyển sang làm Quiz 5 câu!",
+        didUserSpeak: true,
+        mode: "voice",
+      };
+    }
+
+    setFeynmanStep("idle");
+    setSessionResult(nextResult);
+    setModalOpen(true);
+  }, [
+    editableTranscript,
+    feynmanStep,
+    hasActiveOnChainSession,
+    onChainTargetMinutes,
+    studyMinutes,
+    address,
+    studyTopic,
+    appendFlashcards,
+  ]);
+
+  // Thu âm Micro & Sóng âm Visualizer cho Feynman 30s (chỉ báo RMS thật, chọn MIME tương thích nhất)
   useEffect(() => {
     if (!isRecordingFeynman) {
       if (micStreamRef.current) {
@@ -473,41 +896,73 @@ export default function MindSparkInteractiveStudio() {
       return;
     }
 
-    let animFrame: number;
-    let audioCtx: AudioContext;
+    let animFrame = 0;
+    let audioCtx: AudioContext | undefined;
+    let cancelled = false;
     audioChunksRef.current = [];
+    const startedAt = performance.now();
+    let peakSignal = 0;
 
     navigator.mediaDevices
-      ?.getUserMedia({ audio: true })
+      ?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
       .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         micStreamRef.current = stream;
 
-        // 1. Ghi âm thật vào MediaRecorder để gửi AI / Oracle
+        const mimeCandidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/mp4",
+          "audio/ogg",
+        ];
+        const chosenMime =
+          typeof MediaRecorder !== "undefined" &&
+          typeof MediaRecorder.isTypeSupported === "function"
+            ? mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m))
+            : undefined;
+
         try {
-          const recorder = new MediaRecorder(stream);
+          const recorder = chosenMime
+            ? new MediaRecorder(stream, { mimeType: chosenMime })
+            : new MediaRecorder(stream);
           mediaRecorderRef.current = recorder;
           recorder.ondataavailable = (e) => {
-            if (e.data.size > 0) audioChunksRef.current.push(e.data);
+            if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
           };
-          recorder.start();
+          recorder.start(250);
         } catch (e) {
           console.warn("MediaRecorder không hỗ trợ định dạng này:", e);
+          setMicStatus("error");
         }
 
-        // 2. Audio Visualizer sóng âm
         const AudioContextClass =
           window.AudioContext || (window as any).webkitAudioContext;
         audioCtx = new AudioContextClass();
         const source = audioCtx.createMediaStreamSource(stream);
         const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 32;
+        analyser.fftSize = 64;
         source.connect(analyser);
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
         const updateVisualizer = () => {
           analyser.getByteFrequencyData(dataArray);
-          const bars = Array.from(dataArray.slice(0, 12)).map((val) =>
-            Math.max(15, Math.min(100, (val / 255) * 100)),
+          const slice = Array.from(dataArray.slice(0, 20));
+          const rms =
+            slice.reduce((acc, v) => acc + v * v, 0) / Math.max(1, slice.length);
+          const normPeak = Math.sqrt(rms);
+          if (normPeak > peakSignal) peakSignal = normPeak;
+
+          if (normPeak > 12) {
+            setMicStatus("listening");
+          } else if (performance.now() - startedAt > 2800 && peakSignal < 10) {
+            setMicStatus("quiet");
+          }
+
+          const bars = slice.map((val) =>
+            Math.max(12, Math.min(100, (val / 220) * 100))
           );
           setAudioLevels(bars);
           animFrame = requestAnimationFrame(updateVisualizer);
@@ -515,22 +970,20 @@ export default function MindSparkInteractiveStudio() {
         updateVisualizer();
       })
       .catch(() => {
-        const fallback = setInterval(() => {
-          setAudioLevels(
-            Array.from(
-              { length: 12 },
-              () => Math.floor(Math.random() * 70) + 20,
-            ),
+        if (!cancelled) {
+          setMicStatus("error");
+          setAudioLevels(Array(20).fill(10));
+          setFeynmanNotice(
+            "Không truy cập được Micro trình duyệt. Hãy kiểm tra quyền Micro hoặc chuyển sang gõ văn bản / làm Quiz 5 câu!"
           );
-        }, 150);
-        return () => clearInterval(fallback);
+        }
       });
 
     const timer = setInterval(() => {
       setFeynmanSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleFinishFeynman();
+          handleStopAndTranscribeRef.current();
           return 0;
         }
         return prev - 1;
@@ -538,9 +991,10 @@ export default function MindSparkInteractiveStudio() {
     }, 1000);
 
     return () => {
+      cancelled = true;
       clearInterval(timer);
       if (animFrame) cancelAnimationFrame(animFrame);
-      if (audioCtx) audioCtx.close();
+      if (audioCtx) audioCtx.close().catch(() => {});
     };
   }, [isRecordingFeynman]);
 
@@ -551,6 +1005,17 @@ export default function MindSparkInteractiveStudio() {
     setSecondsLeft(next * 60);
   };
 
+  // Tiếp tục phiên cọc đã tồn tại trên Blockchain
+  const handleResumeExistingSession = () => {
+    setShowAssessmentChoice(false);
+    setBreakSecondsLeft(null);
+    setFeynmanStep("idle");
+    setIsRecordingFeynman(false);
+    setSecondsLeft(studyMinutes * 60);
+    resetTracker();
+    setIsStudying(true);
+  };
+
   // Bắt đầu phiên học: Cọc 0.01 AVAX vào StudyStakeVault trên Avalanche Fuji
   const handleStartSession = async () => {
     if (!isConnected) {
@@ -559,33 +1024,42 @@ export default function MindSparkInteractiveStudio() {
       );
     }
 
-    // Tự động chuyển mạng Avalanche Fuji nếu đang ở mạng khác
+    if (hasActiveOnChainSession) {
+      handleResumeExistingSession();
+      return;
+    }
+
     if (chainId !== avalancheFuji.id) {
       try {
         await switchChainAsync({ chainId: avalancheFuji.id });
-      } catch (err: any) {
+      } catch {
         return alert(
           "Vui lòng chuyển ví sang mạng Avalanche Fuji Testnet để tham gia cọc AVAX!",
         );
       }
     }
 
+    setIsStakingTx(true);
     try {
-      // Contract StudyStakeVault yêu cầu targetMinutes >= 30, durationDays >= 1
       const minutesForContract = BigInt(Math.max(30, studyMinutes));
-      await writeContractAsync({
+      const txHash = await writeContractAsync({
         address: CONTRACTS.VAULT,
         abi: VAULT_ABI,
         functionName: "stake",
         args: [minutesForContract, BigInt(1)],
         value: parseEther("0.01"),
+        account: address,
+        chainId: avalancheFuji.id,
       });
+
+      if (publicClient) {
+        await publicClient.waitForTransactionReceipt({ hash: txHash });
+      }
+      refetchVaultSession();
       setSecondsLeft(studyMinutes * 60);
-      setFocusIndex(98);
-      setCurrentPose("Writing Pose");
+      resetTracker();
       setIsStudying(true);
     } catch (err: any) {
-      // Bỏ qua im lặng nếu người dùng bấm Hủy/Reject trên MetaMask
       if (
         err?.name === "UserRejectedRequestError" ||
         err?.message?.includes("User rejected") ||
@@ -598,136 +1072,54 @@ export default function MindSparkInteractiveStudio() {
       alert(
         `Lỗi cọc AVAX: ${err.shortMessage || err.message || "Giao dịch bị từ chối"}`,
       );
+    } finally {
+      setIsStakingTx(false);
     }
   };
 
-  const handleResetOrChange = () => {
+  const handleResetOrChange = useCallback(() => {
     setIsStudying(false);
+    setShowAssessmentChoice(false);
+    setBreakSecondsLeft(null);
     setIsRecordingFeynman(false);
+    setFeynmanStep("idle");
+    setFeynmanSeconds(30);
+    setEditableTranscript("");
+    setFeynmanNotice("");
+    replaceRecordedAudioUrl(null);
     setSecondsLeft(studyMinutes * 60);
+    resetTracker();
+  }, [replaceRecordedAudioUrl, resetTracker, studyMinutes]);
+
+  const handleQuizComplete = (payload: QuizCompletionPayload) => {
+    setQuizModalOpen(false);
+    setSessionResult({
+      passed: payload.passed,
+      actualMinutes: payload.actualMinutes,
+      completedMinutes: payload.completedMinutes,
+      feynmanScore: payload.feynmanScore,
+      llmScore: payload.llmScore,
+      signature: payload.signature,
+      aiFeedback: payload.aiFeedback,
+      flashcards: payload.flashcards,
+      mode: "quiz",
+      oracleMock: payload.oracleMock,
+      stakedAmount: "0.0100 AVAX",
+      vaultAddress: CONTRACTS.VAULT,
+    });
+    setModalOpen(true);
   };
 
-  // Hoàn tất Feynman 30s -> Lấy chữ ký Oracle EIP-191 thật
-  const handleFinishFeynman = async () => {
-    setIsRecordingFeynman(false);
-    setFeynmanSeconds(30);
-
-    const gatewayUrl =
-      process.env.NEXT_PUBLIC_API_GATEWAY_URL || "http://localhost:4020";
-    const aiServiceUrl =
-      process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8000";
-
-    const minutesToAttest = Math.max(30, studyMinutes);
-    const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-    const didUserSpeak = audioBlob.size > 1500;
-    let attestedResult: any = null;
-
-    // 1. Thử gửi file ghi âm thật sang AI Service
-    if (didUserSpeak) {
-      try {
-        const formData = new FormData();
-        formData.append("audio", audioBlob, "feynman_reflection.webm");
-        formData.append(
-          "wallet_address",
-          address || "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA",
-        );
-        formData.append("session_id", `sess_${Date.now()}`);
-        formData.append("minutes_studied", minutesToAttest.toString());
-        formData.append(
-          "topic",
-          "MindSpark Proof of Cognitive Effort on Avalanche",
-        );
-        formData.append("duration_seconds", "30");
-
-        const aiRes = await fetch(`${aiServiceUrl}/api/feynman/evaluate`, {
-          method: "POST",
-          body: formData,
-        });
-
-        if (aiRes.ok) {
-          const aiData = await aiRes.json();
-          if (aiData.proof && aiData.proof.signature) {
-            attestedResult = {
-              actualMinutes: studyMinutes,
-              completedMinutes: minutesToAttest,
-              feynmanScore: aiData.proof.feynmanScore || 90,
-              signature: aiData.proof.signature,
-              aiFeedback:
-                aiData.feedback ||
-                `Focus Index đạt ${focusIndex}%. Phần giải thích Feynman mạch lạc, phản ánh nỗ lực nhận thức xuất sắc.`,
-              didUserSpeak: true,
-              stakedAmount: "0.0100 AVAX",
-              bonusAmount: "0.0010 AVAX",
-              vaultAddress: CONTRACTS.VAULT,
-            };
-          }
-        }
-      } catch (err) {
-        console.warn(
-          "AI Service offline hoặc đang ở chế độ độc lập, chuyển sang Oracle Gateway:",
-          err,
-        );
-      }
+  const handleRedeemReward = (rewardId: string, code: string) => {
+    if (redeemedRewards.includes(rewardId)) return;
+    const updated = [...redeemedRewards, rewardId];
+    setRedeemedRewards(updated);
+    try {
+      localStorage.setItem(REDEEMED_STORAGE_KEY, JSON.stringify(updated));
+    } catch {
+      // Bỏ qua
     }
-
-    // 2. Nếu chưa có proof hoặc người dùng test demo không nói mic, gọi Oracle Gateway thật
-    if (!attestedResult) {
-      try {
-        const oracleRes = await fetch(`${gatewayUrl}/api/v1/oracle/attest`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-oracle-auth": "mindspark-internal-secret-2026",
-          },
-          body: JSON.stringify({
-            studentAddress:
-              address || "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA",
-            completedMinutes: minutesToAttest,
-            feynmanScore: didUserSpeak ? 92 : focusIndex >= 85 ? 94 : 88,
-          }),
-        });
-
-        if (oracleRes.ok) {
-          const oracleData = await oracleRes.json();
-          const feedbackMsg = didUserSpeak
-            ? `Focus Index đạt ${focusIndex}%. AI Pose Guard xác nhận tập trung tốt. Cryptographic Oracle đã cấp chữ ký số EIP-191 hợp lệ trên Avalanche Fuji.`
-            : `Chế độ Demo (${studyMinutes} phút): Focus Index đạt ${focusIndex}%. Cryptographic Oracle đã cấp chữ ký EIP-191 để hoàn tất quy trình Claim cọc trên Avalanche Fuji.`;
-
-          attestedResult = {
-            actualMinutes: studyMinutes,
-            completedMinutes: minutesToAttest,
-            feynmanScore: didUserSpeak ? 92 : focusIndex >= 85 ? 94 : 88,
-            signature: oracleData.signature,
-            aiFeedback: feedbackMsg,
-            didUserSpeak: didUserSpeak,
-            stakedAmount: "0.0100 AVAX",
-            bonusAmount: "0.0010 AVAX",
-            vaultAddress: CONTRACTS.VAULT,
-          };
-        }
-      } catch (err) {
-        console.error("Lỗi Oracle Gateway:", err);
-      }
-    }
-
-    // 3. Fallback an toàn nếu cả 2 service đều offline
-    if (!attestedResult) {
-      attestedResult = {
-        actualMinutes: studyMinutes,
-        completedMinutes: minutesToAttest,
-        feynmanScore: focusIndex >= 85 ? 94 : 88,
-        signature:
-          "0x8f3a9c2b1e4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b",
-        aiFeedback: `Focus Index đạt ${focusIndex}%. Phiên học hoàn thành tốt. Vui lòng đảm bảo đã cọc AVAX trước khi claim phần thưởng.`,
-        didUserSpeak: false,
-        stakedAmount: "0.0100 AVAX",
-        bonusAmount: "0.0010 AVAX",
-        vaultAddress: CONTRACTS.VAULT,
-      };
-    }
-
-    setSessionResult(attestedResult);
-    setModalOpen(true);
+    alert(`🎉 Đổi quà thành công! Mã Voucher của bạn: ${code}`);
   };
 
   const formatTime = (secs: number) => {
@@ -747,10 +1139,16 @@ export default function MindSparkInteractiveStudio() {
   const circleCircumference = 2 * Math.PI * circleRadius;
   const strokeDashoffset = circleCircumference * (1 - progressRatio);
 
-  const sbtLevel = badgeMetrics ? Number(badgeMetrics[0]) : 1;
+  const sbtLevel = badgeMetrics ? Number(badgeMetrics[0]) || 1 : 1;
   const sbtMinutes = badgeMetrics ? Number(badgeMetrics[1]) : 0;
+  const sbtSessions = badgeMetrics ? Number(badgeMetrics[2]) : 0;
+  const sbtAvgScore = badgeMetrics ? Number(badgeMetrics[3]) : 0;
   const activeSoundObj =
     SOUND_TRACKS.find((t) => t.id === currentTrack) || SOUND_TRACKS[0];
+
+  const activeMinutesForModes = hasActiveOnChainSession
+    ? Math.max(30, onChainTargetMinutes)
+    : Math.max(30, studyMinutes);
 
   return (
     <div
@@ -777,7 +1175,6 @@ export default function MindSparkInteractiveStudio() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Nút Cách hoạt động (Chỉ mở khi bấm) */}
           <button
             onClick={() => setShowGuideModal(true)}
             className={`px-3.5 py-1.5 rounded-full text-xs font-medium border flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
@@ -850,7 +1247,6 @@ export default function MindSparkInteractiveStudio() {
             )}
           </div>
 
-          {/* Nút Dark / Light Mode */}
           <button
             onClick={() => setDarkMode(!darkMode)}
             className={`px-3 py-1.5 rounded-full text-xs font-medium border flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
@@ -876,482 +1272,1269 @@ export default function MindSparkInteractiveStudio() {
       {/* KHU VỰC TRUNG TÂM */}
       <main className="flex-1 flex flex-col items-center justify-center px-4 pb-24 pt-2">
         {/* 1. KHÔNG GIAN FOCUS ROOM */}
-        {activeSpace === "focus" && (
-          <div className="w-full max-w-4xl flex flex-col items-center space-y-6 animate-in fade-in duration-500">
-            {/* Giới thiệu súc tích */}
-            {!isStudying && !isRecordingFeynman && (
-              <div className="text-center max-w-2xl space-y-2.5 px-2">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#6E8E72]/15 text-[#6E8E72] text-[11px] font-semibold">
-                  <Sparkles className="w-3 h-3" /> Nền tảng Study-to-Earn được
-                  giám sát bởi Edge-AI
-                </div>
-                <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">
-                  Tập trung học thật. Nhận học bổng tức thì.
-                </h2>
-                <p
-                  className={`text-xs sm:text-sm leading-relaxed ${darkMode ? "text-stone-400" : "text-[#6E655C]"}`}
-                >
-                  Cam kết mục tiêu bằng AVAX, tự do đọc sách & ghi chép dưới sự
-                  bảo vệ của AI chống xao nhãng điện thoại, tóm tắt kiến thức 30
-                  giây để tự động tạo Flashcard và nhận thưởng qua giao thức{" "}
-                  <strong>x402</strong>.
-                </p>
-              </div>
-            )}
+        {activeSpace === "focus" && (() => {
+          const transcriptWordCount = editableTranscript
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean).length;
+          const isFocusIdle =
+            !isStudying && !showAssessmentChoice && feynmanStep === "idle";
+          const activeTopicLabel =
+            studyTopic.trim() || "Kiến thức tổng hợp phiên học";
 
-            {/* Thanh chọn Chế độ Cá nhân / Học nhóm */}
-            <div className="flex items-center gap-2 text-xs">
-              <span
-                className={`font-medium ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
-              >
-                Chế độ:
-              </span>
-              <div
-                className={`p-1 rounded-full border flex gap-1 ${
-                  darkMode
-                    ? "bg-[#211F1D] border-white/10"
-                    : "bg-[#FCFBF7] border-[#E5DFD3]"
-                }`}
-              >
-                <button
-                  onClick={() => setStudyMode("solo")}
-                  className={`px-3 py-1 rounded-full font-medium transition-all cursor-pointer ${
-                    studyMode === "solo"
-                      ? "bg-[#6E8E72] text-white shadow-xs"
-                      : "text-stone-400 hover:text-stone-200"
-                  }`}
-                >
-                  👤 Solo
-                </button>
-                <button
-                  onClick={() => setStudyMode("group")}
-                  className={`px-3 py-1 rounded-full font-medium transition-all cursor-pointer ${
-                    studyMode === "group"
-                      ? "bg-[#6E8E72] text-white shadow-xs"
-                      : "text-stone-400 hover:text-stone-200"
-                  }`}
-                >
-                  👥 Study Guild (4 Online)
-                </button>
-              </div>
-            </div>
+          const poseBadgeStyle =
+            currentPose === "Phone Distraction" ||
+            currentPose === "Drowsy / Absent"
+              ? "bg-rose-500/15 text-rose-600 dark:text-rose-300 animate-pulse font-bold"
+              : currentPose === "Thinking / Rest"
+                ? "bg-sky-500/15 text-sky-600 dark:text-sky-300 font-semibold"
+                : "bg-[#6E8E72]/15 text-[#6E8E72] font-semibold";
 
-            {/* THẺ ĐỒNG HỒ POMODORO TƯƠNG TÁC ĐỘNG */}
+          const poseDisplayLabel =
+            currentPose === "Thinking / Rest"
+              ? "🧠 Tư thế suy nghĩ / Nghỉ ngơi"
+              : currentPose === "Drowsy / Absent"
+                ? "⚠️ Vắng mặt / Rời khung hình"
+                : currentPose === "Phone Distraction"
+                  ? "📱 Phát hiện điện thoại"
+                  : currentPose;
+
+          return (
             <div
-              className={`w-full max-w-[520px] rounded-[32px] p-7 sm:p-9 border transition-all duration-300 ${
-                darkMode
-                  ? "bg-[#211F1D] border-white/10 shadow-2xl"
-                  : "bg-[#FCFBF7] border-[#EAE4D7] shadow-[0_16px_48px_rgba(45,38,32,0.07)]"
-              }`}
+              className={`w-full ${isStudying ? "max-w-6xl" : "max-w-4xl"} flex flex-col items-center space-y-6 animate-in fade-in duration-500`}
             >
-              {/* Hai ô điều chỉnh Study Time & Break Time */}
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="space-y-1.5">
-                  <label
-                    className={`block text-xs font-medium pl-1 ${darkMode ? "text-stone-400" : "text-[#6E655C]"}`}
-                  >
-                    Thời gian học (phút)
-                  </label>
-                  <div
-                    className={`flex items-center justify-between h-11 px-4 rounded-full border transition-colors ${
-                      darkMode
-                        ? "bg-[#181715] border-white/10"
-                        : "bg-[#F6F3EB] border-[#E6E0D4]"
-                    }`}
-                  >
-                    <button
-                      onClick={() => handleAdjustStudyTime(-5)}
-                      disabled={isStudying}
-                      className="p-1.5 rounded-full hover:bg-black/5 disabled:opacity-30 transition-transform active:scale-90 cursor-pointer"
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="font-bold text-sm tabular-nums">
-                      {studyMinutes}
-                    </span>
-                    <button
-                      onClick={() => handleAdjustStudyTime(5)}
-                      disabled={isStudying}
-                      className="p-1.5 rounded-full hover:bg-black/5 disabled:opacity-30 transition-transform active:scale-90 cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label
-                    className={`block text-xs font-medium pl-1 ${darkMode ? "text-stone-400" : "text-[#6E655C]"}`}
-                  >
-                    Nghỉ giải lao (phút)
-                  </label>
-                  <div
-                    className={`flex items-center justify-between h-11 px-4 rounded-full border transition-colors ${
-                      darkMode
-                        ? "bg-[#181715] border-white/10"
-                        : "bg-[#F6F3EB] border-[#E6E0D4]"
-                    }`}
-                  >
-                    <button
-                      onClick={() =>
-                        setBreakMinutes(Math.max(1, breakMinutes - 1))
-                      }
-                      disabled={isStudying}
-                      className="p-1.5 rounded-full hover:bg-black/5 disabled:opacity-30 transition-transform active:scale-90 cursor-pointer"
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="font-bold text-sm tabular-nums">
-                      {breakMinutes}
-                    </span>
-                    <button
-                      onClick={() =>
-                        setBreakMinutes(Math.min(30, breakMinutes + 1))
-                      }
-                      disabled={isStudying}
-                      className="p-1.5 rounded-full hover:bg-black/5 disabled:opacity-30 transition-transform active:scale-90 cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Nhãn trạng thái & Focus Index */}
-              <div className="flex flex-col items-center">
-                <div className="flex items-center gap-2 mb-4">
-                  <span className="px-4 py-1 rounded-full bg-[#6E8E72] text-white text-xs font-medium tracking-wide shadow-2xs">
-                    {isRecordingFeynman
-                      ? "🎙️ Phản tư Feynman 30s"
-                      : isStudying
-                        ? `AI Pose: ${currentPose}`
-                        : "Sẵn sàng vào phiên học"}
-                  </span>
-                  {isStudying && (
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                        focusIndex >= 80
-                          ? "bg-emerald-500/10 border-emerald-500/30 text-[#6E8E72]"
-                          : "bg-rose-500/10 border-rose-500/30 text-rose-600 animate-pulse"
-                      }`}
-                    >
-                      Focus: {focusIndex}%
-                    </span>
-                  )}
-                </div>
-
-                {/* VÒNG TRÒN TIẾN ĐỘ ĐỘNG BAO QUANH ĐỒNG HỒ */}
-                <div className="relative w-64 h-64 flex items-center justify-center my-1">
-                  <svg
-                    className="w-full h-full -rotate-90 transform"
-                    viewBox="0 0 256 256"
-                  >
-                    {/* Vòng nền */}
-                    <circle
-                      cx="128"
-                      cy="128"
-                      r={circleRadius}
-                      stroke={darkMode ? "rgba(255,255,255,0.08)" : "#EFECE4"}
-                      strokeWidth="8"
-                      fill="transparent"
-                    />
-                    {/* Vòng tiến độ chạy mượt */}
-                    <circle
-                      cx="128"
-                      cy="128"
-                      r={circleRadius}
-                      stroke={
-                        currentPose === "Phone Distraction" && isStudying
-                          ? "#e11d48"
-                          : "#6E8E72"
-                      }
-                      strokeWidth="8"
-                      strokeDasharray={circleCircumference}
-                      strokeDashoffset={strokeDashoffset}
-                      strokeLinecap="round"
-                      fill="transparent"
-                      className="transition-all duration-700 ease-out"
-                    />
-                  </svg>
-
-                  {/* Số đếm ngược ở tâm vòng tròn */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span
-                      className={`text-5xl sm:text-6xl font-bold tracking-wider tabular-nums font-mono transition-transform ${
-                        isStudying ? "scale-105" : ""
-                      }`}
-                    >
-                      {isRecordingFeynman
-                        ? `00:${feynmanSeconds.toString().padStart(2, "0")}`
-                        : formatTime(secondsLeft)}
-                    </span>
-                    <span className="text-[11px] opacity-60 mt-1.5 flex items-center gap-1">
-                      <Lock className="w-3 h-3 text-[#6E8E72]" />
-                      {isStudying
-                        ? "Camera AI xử lý trên RAM"
-                        : "Cọc cam kết: 0.01 AVAX"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Hộp minh bạch nạp cọc Vault */}
-                <div
-                  className={`mt-4 w-full p-3 rounded-2xl border text-xs space-y-1 ${
-                    darkMode
-                      ? "bg-[#181715] border-white/5 text-stone-300"
-                      : "bg-[#F7F4EC] border-[#E8E2D5] text-[#5C5349]"
-                  }`}
-                >
-                  <div className="flex items-center justify-between font-semibold">
-                    <span className="flex items-center gap-1.5 text-[#6E8E72]">
-                      <ShieldCheck className="w-3.5 h-3.5" /> Nơi nạp cọc:
-                      StudyStakeVault
-                    </span>
-                    <span className="font-mono text-[10px] opacity-75">
-                      0x62A6...5223
-                    </span>
-                  </div>
-                  <p className="text-[11px] opacity-80 leading-relaxed">
-                    0.01 AVAX được khóa trên Avalanche Fuji. Hệ thống hoàn cọc
-                    100% + thưởng ngay khi bạn hoàn thành phiên học!
-                  </p>
-                </div>
-
-                {/* Khu vực ghi âm Feynman 30s hoặc Nút bấm hành động */}
-                {isRecordingFeynman ? (
-                  <div className="w-full text-center space-y-4 mt-4">
-                    <div className="flex items-center justify-center gap-1.5 h-10">
-                      {audioLevels.map((lvl, idx) => (
-                        <div
-                          key={idx}
-                          className="w-1.5 bg-[#6E8E72] rounded-full transition-all duration-150"
-                          style={{ height: `${lvl}%` }}
-                        />
-                      ))}
+              {isFocusIdle && (
+                <>
+                  <div className="text-center max-w-2xl space-y-2.5 px-2">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#6E8E72]/15 text-[#6E8E72] text-[11px] font-semibold">
+                      <Sparkles className="w-3 h-3" /> Nền tảng Study-to-Earn được
+                      giám sát bởi Edge-AI
                     </div>
-                    <p className="text-xs text-[#6E8E72] font-medium flex items-center justify-center gap-1.5">
-                      <Mic className="w-4 h-4 animate-pulse" /> Hãy nói tóm tắt
-                      kiến thức vừa học trong 30 giây...
-                    </p>
-                    <button
-                      onClick={handleFinishFeynman}
-                      className="px-6 py-2.5 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] text-white text-xs font-medium transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                    <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">
+                      Tập trung học thật. Nhận học bổng tức thì.
+                    </h2>
+                    <p
+                      className={`text-xs sm:text-sm leading-relaxed ${darkMode ? "text-stone-400" : "text-[#6E655C]"}`}
                     >
-                      Hoàn tất & Nhận xác thực Oracle
-                    </button>
+                      Cam kết mục tiêu bằng AVAX, tự do đọc sách & ghi chép dưới sự
+                      bảo vệ của AI chống xao nhãng điện thoại, tự chọn thuyết trình
+                      Feynman 30 giây hoặc Quiz 5 câu để nhận thưởng qua giao thức{" "}
+                      <strong>x402</strong>.
+                    </p>
                   </div>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-center gap-3 w-full mt-5">
-                    {!isStudying ? (
+
+                  {/* Thanh chọn Chế độ Cá nhân / Học nhóm */}
+                  <div className="flex items-center gap-2 text-xs">
+                    <span
+                      className={`font-medium ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
+                    >
+                      Chế độ:
+                    </span>
+                    <div
+                      className={`p-1 rounded-full border flex gap-1 ${
+                        darkMode
+                          ? "bg-[#211F1D] border-white/10"
+                          : "bg-[#FCFBF7] border-[#E5DFD3]"
+                      }`}
+                    >
                       <button
-                        onClick={handleStartSession}
-                        className="px-8 py-3 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] text-white text-sm font-medium shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                        onClick={() => setStudyMode("solo")}
+                        className={`px-3 py-1 rounded-full font-medium transition-all cursor-pointer ${
+                          studyMode === "solo"
+                            ? "bg-[#6E8E72] text-white shadow-xs"
+                            : "text-stone-400 hover:text-stone-200"
+                        }`}
                       >
-                        Start (Stake 0.01 AVAX)
+                        👤 Solo
                       </button>
+                      <button
+                        onClick={() => setStudyMode("group")}
+                        className={`px-3 py-1 rounded-full font-medium transition-all cursor-pointer ${
+                          studyMode === "group"
+                            ? "bg-[#6E8E72] text-white shadow-xs"
+                            : "text-stone-400 hover:text-stone-200"
+                        }`}
+                      >
+                        👥 Study Guild (4 Online)
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* A. GIAO DIỆN ĐANG HỌC: STUDIO CAMERA 2 CỘT + POMODORO */}
+              {isStudying && (
+                <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                  {/* CỘT CAMERA STUDIO LỚN */}
+                  <div
+                    className={`${cameraExpanded ? "lg:col-span-12" : "lg:col-span-7"} rounded-[28px] p-4 sm:p-5 border shadow-lg space-y-3 transition-all ${
+                      darkMode
+                        ? "bg-[#211F1D] border-white/10"
+                        : "bg-[#FCFBF7] border-[#E5DFD3]"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs ${poseBadgeStyle}`}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          {poseDisplayLabel}
+                        </span>
+                        {isAutoDetect && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                            Auto AI
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setCameraExpanded(!cameraExpanded)}
+                          className={`px-2.5 py-1.5 rounded-full text-xs font-medium border flex items-center gap-1 cursor-pointer transition-colors ${
+                            darkMode
+                              ? "border-white/10 bg-white/5 hover:bg-white/10 text-stone-200"
+                              : "border-[#E5DFD3] bg-[#F5F2EA] hover:bg-[#ECE7DA] text-[#3E362E]"
+                          }`}
+                          title={cameraExpanded ? "Thu nhỏ màn hình" : "Phóng to màn hình"}
+                        >
+                          {cameraExpanded ? (
+                            <>
+                              <Minimize2 className="w-3.5 h-3.5" /> Thu nhỏ
+                            </>
+                          ) : (
+                            <>
+                              <Maximize2 className="w-3.5 h-3.5" /> Phóng to
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => setIsAutoDetect(!isAutoDetect)}
+                          className={`p-1.5 rounded-full border text-xs transition-colors cursor-pointer ${
+                            isAutoDetect
+                              ? "text-[#6E8E72] border-[#6E8E72]/40 bg-[#6E8E72]/10 font-bold"
+                              : "text-stone-400 border-white/10 hover:bg-stone-500/10"
+                          }`}
+                          title={
+                            isAutoDetect
+                              ? "Đang bật AI Tự động từ camera"
+                              : "Đang ở chế độ Thủ công"
+                          }
+                        >
+                          <Cpu className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setShowCameraPip(!showCameraPip)}
+                          className="cursor-pointer text-stone-400 hover:text-stone-600 p-1.5 rounded-full border border-transparent hover:border-black/10"
+                          title={showCameraPip ? "Ẩn camera" : "Hiện camera"}
+                        >
+                          {showCameraPip ? (
+                            <CameraOff className="w-4 h-4" />
+                          ) : (
+                            <Camera className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {showCameraPip ? (
+                      <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black relative border border-white/10">
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover scale-x-[-1]"
+                        />
+
+                        {cameraStatus === "active" && (
+                          <div className="absolute inset-0 pointer-events-none p-3 sm:p-4 flex flex-col justify-between">
+                            <div className="flex items-center justify-between text-[11px] font-mono">
+                              <span className="bg-black/65 backdrop-blur-xs text-emerald-400 px-2.5 py-1 rounded-lg border border-emerald-500/30 flex items-center gap-1.5">
+                                <Activity className="w-3 h-3 animate-pulse" />
+                                {visionEngine === "mediapipe-wasm" && hasPhoneDetector
+                                  ? "MediaPipe WASM • Phone & Person AI"
+                                  : visionEngine === "mediapipe-wasm"
+                                    ? "MediaPipe WASM (Đang nạp Phone AI...)"
+                                    : "Edge Vision RAM"}
+                              </span>
+
+                              <div className="flex items-center gap-2">
+                                {cameraExpanded && (
+                                  <span className="bg-black/75 backdrop-blur-xs text-white px-2.5 py-1 rounded-lg border border-white/15 font-bold">
+                                    ⏱ {formatTime(secondsLeft)} • Focus {focusIndex}%
+                                  </span>
+                                )}
+                                <span className="bg-black/65 backdrop-blur-xs text-white/90 px-2.5 py-1 rounded-lg">
+                                  Góc cúi: {headTiltAngle}°
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="self-center w-36 sm:w-44 h-24 sm:h-28 border border-emerald-400/40 rounded-2xl flex flex-col items-center justify-center relative">
+                              <div className="w-3 h-3 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
+                              <div className="w-3 h-3 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
+                              <div className="w-3 h-3 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
+                              <div className="w-3 h-3 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
+                              <span className="text-[11px] text-emerald-400/95 font-mono font-semibold">
+                                CONF: {postureConfidence}%
+                              </span>
+                              <span className="text-[10px] text-cyan-300/90 font-mono">
+                                Blink: {blinkCount}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[11px] font-mono">
+                              <span
+                                className={`px-2.5 py-1 rounded-lg ${
+                                  isLiveSubject
+                                    ? "bg-black/65 text-emerald-300"
+                                    : "bg-rose-950/85 text-rose-300"
+                                }`}
+                              >
+                                {isLiveSubject
+                                  ? `Liveness ${livenessScore}%`
+                                  : "⚠️ Nghi ngờ ảnh tĩnh"}
+                              </span>
+                              <span className="bg-black/50 text-white/75 px-2 py-0.5 rounded-lg">
+                                Zero-Video-Upload
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {cameraStatus === "blocked" && (
+                          <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center text-center p-4 text-stone-300">
+                            <AlertTriangle className="w-7 h-7 text-amber-400 mb-2" />
+                            <span className="text-sm font-bold text-amber-300">
+                              Camera đang tối / bị che
+                            </span>
+                            <p className="text-xs opacity-75 mt-1">
+                              Hãy mở cần gạt camera hoặc dùng các nút giả lập bên dưới.
+                            </p>
+                          </div>
+                        )}
+
+                        {cameraStatus === "error" && (
+                          <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center text-center p-4 text-stone-300">
+                            <CameraOff className="w-7 h-7 text-rose-400 mb-2" />
+                            <span className="text-sm font-bold text-rose-300">
+                              Chưa cấp quyền Camera
+                            </span>
+                            <p className="text-xs opacity-75 mt-1">
+                              Hãy cho phép webcam hoặc dùng các nút giả lập bên dưới để test.
+                            </p>
+                          </div>
+                        )}
+
+                        {currentPose === "Phone Distraction" && (
+                          <div className="absolute inset-0 bg-rose-950/80 flex flex-col items-center justify-center text-white text-center p-4 animate-pulse">
+                            <Smartphone className="w-8 h-8 mb-1.5 text-rose-400 animate-bounce" />
+                            <span className="text-sm font-bold text-rose-200">
+                              Cảnh báo cầm điện thoại! ({distractionSeconds}s)
+                            </span>
+                            <span className="text-xs text-rose-300 mt-1">
+                              {isDistractionAlert
+                                ? "Đã tạm dừng Pomodoro & phát chuông!"
+                                : `Sẽ tạm dừng đồng hồ sau ${Math.max(0, 5 - distractionSeconds)}s`}
+                            </span>
+                          </div>
+                        )}
+
+                        {currentPose === "Drowsy / Absent" && (
+                          <div className="absolute inset-0 bg-amber-950/85 flex flex-col items-center justify-center text-white text-center p-4 animate-pulse">
+                            <AlertTriangle className="w-8 h-8 mb-1.5 text-amber-400 animate-bounce" />
+                            <span className="text-sm font-bold text-amber-200">
+                              Không phát hiện người trong khung hình! ({absenceSeconds}s)
+                            </span>
+                            <span className="text-xs text-amber-300 mt-1">
+                              {isPausedByAi
+                                ? "Đã tạm dừng Pomodoro & phát chuông!"
+                                : `Sẽ tạm dừng đồng hồ sau ${Math.max(0, 5 - absenceSeconds)}s`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     ) : (
-                      <button
-                        onClick={() => {
-                          setIsStudying(false);
-                          setIsRecordingFeynman(true);
-                        }}
-                        className="px-7 py-3 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] text-white text-sm font-medium shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                      >
-                        Xong sớm → Nói Feynman 30s
-                      </button>
+                      <div className="aspect-video w-full rounded-2xl bg-black/20 border border-dashed border-black/15 dark:border-white/15 flex flex-col items-center justify-center gap-2 text-xs opacity-75">
+                        <CameraOff className="w-6 h-6" />
+                        <span>Camera đang tạm ẩn — bấm biểu tượng Camera để bật lại</span>
+                      </div>
                     )}
 
-                    <button
-                      onClick={handleResetOrChange}
-                      className={`px-6 py-3 rounded-full text-sm font-medium border transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-                        darkMode
-                          ? "bg-white/5 border-white/10 text-stone-300 hover:bg-white/10"
-                          : "bg-[#F6F3EB] border-[#E6E0D4] text-[#3E362E] hover:bg-[#ECE7DA]"
-                      }`}
-                    >
-                      Reset
-                    </button>
-                  </div>
-                )}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs px-1 pt-0.5">
+                      <span className="text-stone-400 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-[#6E8E72]" />
+                        {isAutoDetect
+                          ? "Camera AI đang tự động nhận diện (cầm điện thoại / rời khung hình sẽ cảnh báo; 2 tay lên đầu = Suy nghĩ/Nghỉ)"
+                          : "Đang chọn tư thế thủ công"}
+                      </span>
+                      {!isAutoDetect && (
+                        <button
+                          onClick={() => setIsAutoDetect(true)}
+                          className="text-[#6E8E72] hover:underline font-semibold cursor-pointer"
+                        >
+                          Bật lại Auto AI
+                        </button>
+                      )}
+                    </div>
 
-                {/* Thanh công cụ nhanh dưới thẻ */}
-                {!isStudying && !isRecordingFeynman && (
-                  <div className="mt-5 pt-4 border-t border-black/5 dark:border-white/5 w-full flex items-center justify-between text-xs">
-                    <button
-                      onClick={() => {
-                        setStudyMinutes(1);
-                        setSecondsLeft(60);
-                      }}
-                      className="text-[#8C8275] hover:text-[#6E8E72] underline underline-offset-4 cursor-pointer"
-                    >
-                      Đặt nhanh 1 phút (Demo)
-                    </button>
-                    <button
-                      onClick={() => setShowGuideModal(true)}
-                      className="text-[#6E8E72] font-medium flex items-center gap-0.5 hover:underline cursor-pointer"
-                    >
-                      Xem quy trình 4 bước{" "}
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                      {(
+                        [
+                          { pose: "Writing Pose", label: "Cúi viết", icon: PenTool, danger: false },
+                          { pose: "Reading Pose", label: "Đọc sách", icon: BookOpenCheck, danger: false },
+                          { pose: "Screen Focus", label: "Màn hình", icon: Monitor, danger: false },
+                          { pose: "Phone Distraction", label: "Điện thoại", icon: Smartphone, danger: true },
+                          { pose: "Drowsy / Absent", label: "Rời ghế", icon: AlertTriangle, danger: true },
+                        ] as { pose: StudyPose; label: string; icon: any; danger: boolean }[]
+                      ).map((btn) => {
+                        const Icon = btn.icon;
+                        const isSelected = currentPose === btn.pose;
+                        return (
+                          <button
+                            key={btn.pose}
+                            onClick={() => selectManualPose(btn.pose)}
+                            className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                              isSelected
+                                ? btn.danger
+                                  ? "bg-rose-600 text-white border-rose-600 shadow-xs font-semibold animate-pulse"
+                                  : "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
+                                : btn.danger
+                                  ? "bg-[#F3EFE6] dark:bg-white/5 text-rose-700 dark:text-rose-400 border-transparent hover:border-rose-400/30"
+                                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
+                            }`}
+                          >
+                            <Icon className="w-3.5 h-3.5" /> {btn.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                )}
-              </div>
-            </div>
 
-            {/* KHU VỰC PHÒNG HỌC NHÓM (STUDY GUILD) NẾU ĐƯỢC CHỌN */}
-            {studyMode === "group" && (
-              <div
-                className={`w-full max-w-3xl rounded-[28px] p-6 border space-y-4 animate-in fade-in duration-300 ${
-                  darkMode
-                    ? "bg-[#211F1D] border-white/10"
-                    : "bg-[#FCFBF7] border-[#EAE4D7] shadow-sm"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-sm flex items-center gap-2">
-                      <Users className="w-4 h-4 text-[#6E8E72]" /> Thành viên
-                      đang học chung phòng
-                    </h3>
+                  {/* CỘT ĐỒNG HỒ POMODORO & THÔNG TIN PHIÊN */}
+                  <div
+                    className={`${
+                      cameraExpanded
+                        ? "lg:col-span-12 max-w-[560px] mx-auto w-full"
+                        : "lg:col-span-5"
+                    } rounded-[28px] p-6 sm:p-7 border transition-all duration-300 ${
+                      darkMode
+                        ? "bg-[#211F1D] border-white/10 shadow-2xl"
+                        : "bg-[#FCFBF7] border-[#EAE4D7] shadow-[0_16px_48px_rgba(45,38,32,0.07)]"
+                    }`}
+                  >
+                    <div className="text-center space-y-1 mb-4">
+                      <span className="text-[11px] uppercase tracking-wider text-[#6E8E72] font-semibold">
+                        Chủ đề đang học
+                      </span>
+                      <h3 className="text-lg sm:text-xl font-bold leading-snug">
+                        {activeTopicLabel}
+                      </h3>
+                    </div>
+
+                    <div className="flex flex-col items-center">
+                      <div className="flex flex-wrap items-center justify-center gap-2 mb-3">
+                        <span
+                          className={`px-3.5 py-1 rounded-full text-xs font-medium tracking-wide ${
+                            isPausedByAi
+                              ? "bg-rose-600 text-white animate-pulse"
+                              : currentPose === "Thinking / Rest"
+                                ? "bg-sky-600 text-white"
+                                : "bg-[#6E8E72] text-white"
+                          }`}
+                        >
+                          {isPausedByAi
+                            ? `⏸️ Tạm dừng AI: ${currentPose}`
+                            : poseDisplayLabel}
+                        </span>
+                        <span
+                          className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                            focusIndex >= 80
+                              ? "bg-emerald-500/10 border-emerald-500/30 text-[#6E8E72]"
+                              : "bg-rose-500/10 border-rose-500/30 text-rose-600 animate-pulse"
+                          }`}
+                        >
+                          Focus: {focusIndex}%
+                        </span>
+                      </div>
+
+                      {isPausedByAi && (
+                        <div className="mb-3 w-full px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-600 dark:text-rose-300 text-xs flex items-center justify-center gap-2 font-medium animate-pulse">
+                          <PauseCircle className="w-4 h-4 shrink-0" />
+                          <span>
+                            Đồng hồ đã tạm dừng do{" "}
+                            {currentPose === "Phone Distraction"
+                              ? "phát hiện dùng điện thoại"
+                              : "vắng mặt / ngủ gục"}
+                            ! Hãy quay lại tư thế học tập.
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="relative w-60 h-60 flex items-center justify-center my-1">
+                        <svg
+                          className="w-full h-full -rotate-90 transform"
+                          viewBox="0 0 256 256"
+                        >
+                          <circle
+                            cx="128"
+                            cy="128"
+                            r={circleRadius}
+                            stroke={darkMode ? "rgba(255,255,255,0.08)" : "#EFECE4"}
+                            strokeWidth="8"
+                            fill="transparent"
+                          />
+                          <circle
+                            cx="128"
+                            cy="128"
+                            r={circleRadius}
+                            stroke={
+                              currentPose === "Phone Distraction" ||
+                              currentPose === "Drowsy / Absent"
+                                ? "#e11d48"
+                                : "#6E8E72"
+                            }
+                            strokeWidth="8"
+                            strokeDasharray={circleCircumference}
+                            strokeDashoffset={strokeDashoffset}
+                            strokeLinecap="round"
+                            fill="transparent"
+                            className="transition-all duration-700 ease-out"
+                          />
+                        </svg>
+
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span
+                            className={`text-5xl font-bold tracking-wider tabular-nums font-mono transition-transform ${
+                              !isPausedByAi ? "scale-105" : ""
+                            }`}
+                          >
+                            {formatTime(secondsLeft)}
+                          </span>
+                          <span className="text-[11px] opacity-65 mt-1.5 flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-[#6E8E72]" />
+                            Camera AI xử lý trên RAM
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`mt-4 w-full p-3 rounded-2xl border text-xs space-y-1 ${
+                          darkMode
+                            ? "bg-[#181715] border-white/5 text-stone-300"
+                            : "bg-[#F7F4EC] border-[#E8E2D5] text-[#5C5349]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-semibold">
+                          <span className="flex items-center gap-1.5 text-[#6E8E72]">
+                            <ShieldCheck className="w-3.5 h-3.5" /> StudyStakeVault
+                          </span>
+                          <span className="font-mono text-[10px] opacity-75">
+                            {CONTRACTS.VAULT.slice(0, 6)}...{CONTRACTS.VAULT.slice(-4)}
+                          </span>
+                        </div>
+                        <p className="text-[11px] opacity-80 leading-relaxed">
+                          Cọc 0.01 AVAX đang được bảo vệ. Hoàn tất để chọn nói Feynman 30s hoặc làm Quiz 5 câu!
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col gap-2.5 w-full mt-5">
+                        <button
+                          onClick={() => {
+                            setIsStudying(false);
+                            setShowAssessmentChoice(true);
+                          }}
+                          className="w-full px-6 py-3.5 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] text-white text-sm font-semibold shadow-md transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Check className="w-4 h-4" />
+                          Hoàn thành phiên học → Chọn bài kiểm tra
+                        </button>
+                        <button
+                          onClick={handleResetOrChange}
+                          className={`w-full px-5 py-2.5 rounded-full text-xs font-medium border transition-colors cursor-pointer ${
+                            darkMode
+                              ? "bg-white/5 border-white/10 text-stone-300 hover:bg-white/10"
+                              : "bg-[#F6F3EB] border-[#E6E0D4] text-[#3E362E] hover:bg-[#ECE7DA]"
+                          }`}
+                        >
+                          Hủy / Quay lại màn hình chính
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* B. MÀN HÌNH CHỌN PHƯƠNG THỨC ĐÁNH GIÁ SAU PHIÊN HỌC (KHÔNG ÉP NÓI LIỀN) */}
+              {showAssessmentChoice && !isStudying && feynmanStep === "idle" && (
+                <div
+                  className={`w-full max-w-[680px] rounded-[32px] p-7 sm:p-9 border space-y-6 animate-in fade-in zoom-in-95 duration-300 ${
+                    darkMode
+                      ? "bg-[#211F1D] border-white/10 shadow-2xl"
+                      : "bg-[#FCFBF7] border-[#EAE4D7] shadow-[0_16px_48px_rgba(45,38,32,0.08)]"
+                  }`}
+                >
+                  <div className="text-center space-y-2">
+                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 text-xs font-semibold">
+                      <Sparkles className="w-3.5 h-3.5" /> Hoàn thành phiên tập trung!
+                    </div>
+                    <h2 className="text-2xl sm:text-3xl font-bold">
+                      🎉 Chúc mừng bạn đã hoàn thành giờ học!
+                    </h2>
+                    <p
+                      className={`text-sm ${darkMode ? "text-stone-300" : "text-[#5C5349]"}`}
+                    >
+                      Chủ đề: <strong className="font-bold">{activeTopicLabel}</strong>
+                    </p>
                     <p
                       className={`text-xs ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
                     >
-                      Cả phòng cùng cam kết cọc AVAX để giữ kỷ luật học tập.
+                      Hãy chọn hình thức phản tư phù hợp với bạn lúc này để Oracle xác thực và hoàn trả 0.01 AVAX cọc + thưởng:
                     </p>
                   </div>
-                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">
-                    🟢 Tỷ lệ kỷ luật: 98.2%
-                  </span>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                  {/* Ô Bạn */}
+                  {breakSecondsLeft !== null && (
+                    <div className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 text-sm font-semibold text-amber-700 dark:text-amber-300">
+                        <Coffee className="w-5 h-5" />
+                        <span>
+                          Đang nghỉ giải lao ngắn:{" "}
+                          <span className="font-mono font-bold">
+                            {formatTime(breakSecondsLeft)}
+                          </span>
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setBreakSecondsLeft(null)}
+                        className="px-4 py-1.5 rounded-full bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Sẵn sàng kiểm tra ngay
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={startFeynmanRecording}
+                      className={`text-left p-5 rounded-2xl border-2 transition-all hover:-translate-y-0.5 cursor-pointer space-y-2 ${
+                        darkMode
+                          ? "bg-[#181715] border-[#6E8E72]/50 hover:border-[#6E8E72]"
+                          : "bg-[#F5F8F5] border-[#6E8E72]/40 hover:border-[#6E8E72]"
+                      }`}
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-[#6E8E72] text-white flex items-center justify-center">
+                        <Mic className="w-5 h-5" />
+                      </div>
+                      <div className="font-bold text-base">
+                        🎙️ Thuyết trình Feynman 30s
+                      </div>
+                      <p className="text-xs opacity-80 leading-relaxed">
+                        Nói tóm tắt lại bài bằng giọng của bạn (≥ 15 từ). Có màn hình nghe lại & xem văn bản AI nghe được trước khi chấm!
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBreakSecondsLeft(null);
+                        setShowAssessmentChoice(false);
+                        setQuizModalOpen(true);
+                      }}
+                      className={`text-left p-5 rounded-2xl border-2 transition-all hover:-translate-y-0.5 cursor-pointer space-y-2 ${
+                        darkMode
+                          ? "bg-[#181715] border-amber-500/40 hover:border-amber-400"
+                          : "bg-amber-50/70 border-amber-500/35 hover:border-amber-600"
+                      }`}
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center">
+                        <BrainCircuit className="w-5 h-5" />
+                      </div>
+                      <div className="font-bold text-base">
+                        📝 Làm Quiz trắc nghiệm 5 câu
+                      </div>
+                      <p className="text-xs opacity-80 leading-relaxed">
+                        Yên tĩnh không cần nói — trả lời đúng ≥ 3/5 câu trắc nghiệm do Gemini AI soạn theo chủ đề của bạn.
+                      </p>
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-black/10 dark:border-white/10">
+                    {breakSecondsLeft === null ? (
+                      <button
+                        type="button"
+                        onClick={() => setBreakSecondsLeft(breakMinutes * 60)}
+                        className={`px-4 py-2 rounded-full text-xs font-medium border flex items-center gap-1.5 cursor-pointer ${
+                          darkMode
+                            ? "border-white/15 bg-white/5 hover:bg-white/10 text-stone-200"
+                            : "border-[#E5DFD3] bg-[#F5F2EA] hover:bg-[#ECE7DA] text-[#3E362E]"
+                        }`}
+                      >
+                        <Coffee className="w-3.5 h-3.5 text-amber-500" />
+                        Nghỉ giải lao {breakMinutes} phút (tắt Camera AI, không mất cọc) rồi đánh giá sau
+                      </button>
+                    ) : (
+                      <span className="text-xs opacity-70">
+                        Chọn bất kỳ chế độ nào ở trên khi bạn sẵn sàng.
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleResetOrChange}
+                      className="text-xs opacity-70 hover:opacity-100 underline cursor-pointer"
+                    >
+                      Quay lại màn hình chính
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* C. KHU VỰC FEYNMAN 2 BƯỚC: GHI ÂM + XEM LẠI TRANSCRIPT & CHẤM ĐIỂM */}
+              {feynmanStep !== "idle" && (
+                <div
+                  className={`w-full max-w-[680px] rounded-[32px] p-7 sm:p-9 border space-y-5 animate-in fade-in duration-300 ${
+                    darkMode
+                      ? "bg-[#211F1D] border-white/10 shadow-2xl"
+                      : "bg-[#FCFBF7] border-[#EAE4D7] shadow-[0_16px_48px_rgba(45,38,32,0.08)]"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="text-[11px] uppercase tracking-wider text-[#6E8E72] font-semibold">
+                        Phản tư Feynman • Bước{" "}
+                        {feynmanStep === "recording" || feynmanStep === "transcribing"
+                          ? "1/2 (Ghi âm & Nhận diện)"
+                          : "2/2 (Kiểm tra & Chấm điểm)"}
+                      </span>
+                      <h3 className="text-lg sm:text-xl font-bold mt-0.5">
+                        {activeTopicLabel}
+                      </h3>
+                    </div>
+
+                    {feynmanStep === "recording" && (
+                      <span className="text-2xl font-mono font-bold px-4 py-1.5 rounded-full bg-[#6E8E72]/15 text-[#6E8E72] tabular-nums">
+                        00:{feynmanSeconds.toString().padStart(2, "0")}
+                      </span>
+                    )}
+                  </div>
+
+                  {feynmanStep === "recording" && (
+                    <div className="space-y-5 py-2 text-center">
+                      <div className="flex items-end justify-center gap-1.5 h-20 px-4">
+                        {audioLevels.map((lvl, idx) => (
+                          <div
+                            key={idx}
+                            className={`w-2 rounded-full transition-all duration-100 ${
+                              micStatus === "error"
+                                ? "bg-rose-400/60"
+                                : micStatus === "quiet"
+                                  ? "bg-amber-400"
+                                  : "bg-[#6E8E72]"
+                            }`}
+                            style={{ height: `${lvl}%` }}
+                          />
+                        ))}
+                      </div>
+
+                      <div className="flex justify-center">
+                        <span
+                          className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
+                            micStatus === "error"
+                              ? "bg-rose-500/15 text-rose-600 dark:text-rose-300"
+                              : micStatus === "quiet"
+                                ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 animate-pulse"
+                                : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                          }`}
+                        >
+                          <Mic className="w-3.5 h-3.5" />
+                          {micStatus === "error"
+                            ? "Không truy cập được Micro — hãy chuyển sang gõ tóm tắt hoặc làm Quiz"
+                            : micStatus === "quiet"
+                              ? "Mic đang hơi nhỏ — hãy nói to rõ ràng hoặc đưa mic lại gần hơn"
+                              : "Micro đang bắt sóng giọng nói tốt — hãy giải thích như đang dạy lại cho bạn bè"}
+                        </span>
+                      </div>
+
+                      {feynmanNotice && (
+                        <div className="text-xs p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300">
+                          {feynmanNotice}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleStopAndTranscribe}
+                          className="px-6 py-3 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] text-white text-sm font-semibold shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                        >
+                          ⏹ Dừng & Xem bản chép AI
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsRecordingFeynman(false);
+                            setFeynmanStep("idle");
+                            setQuizModalOpen(true);
+                          }}
+                          className={`px-4 py-3 rounded-full text-xs font-semibold border cursor-pointer flex items-center gap-1.5 ${
+                            darkMode
+                              ? "border-white/15 bg-white/5 hover:bg-white/10 text-amber-300"
+                              : "border-amber-600/30 bg-amber-50 hover:bg-amber-100 text-amber-800"
+                          }`}
+                        >
+                          <BrainCircuit className="w-4 h-4" /> Chuyển sang Quiz 5 câu
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {feynmanStep === "transcribing" && (
+                    <div className="py-14 flex flex-col items-center justify-center gap-3 text-center">
+                      <Loader2 className="w-8 h-8 animate-spin text-[#6E8E72]" />
+                      <div className="text-sm font-semibold">
+                        Groq Whisper đang chuyển giọng nói của bạn thành văn bản...
+                      </div>
+                      <p className="text-xs opacity-70">
+                        Vui lòng đợi vài giây, sau đó bạn có thể nghe lại và chỉnh sửa nếu AI nghe nhầm.
+                      </p>
+                    </div>
+                  )}
+
+                  {(feynmanStep === "review" || feynmanStep === "grading") && (
+                    <div className="space-y-4">
+                      {feynmanNotice && (
+                        <div className="text-xs p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/35 text-amber-700 dark:text-amber-300 leading-relaxed">
+                          ⚠️ {feynmanNotice}
+                        </div>
+                      )}
+
+                      {recordedAudioUrl && (
+                        <div
+                          className={`p-3.5 rounded-2xl border space-y-1.5 ${
+                            darkMode
+                              ? "bg-[#181715] border-white/10"
+                              : "bg-[#F6F3EB] border-[#E6E0D4]"
+                          }`}
+                        >
+                          <div className="text-xs font-semibold opacity-80">
+                            🔊 Nghe lại đoạn ghi âm của bạn:
+                          </div>
+                          <audio controls src={recordedAudioUrl} className="w-full h-10" />
+                        </div>
+                      )}
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <label className="font-bold">
+                            Văn bản AI nghe được (bạn có thể chỉnh sửa lại nếu AI nghe nhầm từ):
+                          </label>
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full font-semibold ${
+                              transcriptWordCount >= 15
+                                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
+                                : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                            }`}
+                          >
+                            {transcriptWordCount}/15 từ tối thiểu
+                          </span>
+                        </div>
+                        <textarea
+                          rows={4}
+                          value={editableTranscript}
+                          onChange={(e) => setEditableTranscript(e.target.value)}
+                          disabled={feynmanStep === "grading"}
+                          placeholder="Nếu mic chưa thu rõ, bạn cũng có thể gõ phần tóm tắt kiến thức của bạn tại đây (tối thiểu 15 từ)..."
+                          className={`w-full p-4 rounded-2xl border-2 text-sm leading-relaxed focus:outline-none focus:border-[#6E8E72] ${
+                            darkMode
+                              ? "bg-[#181715] border-white/10 text-[#F3EFE6]"
+                              : "bg-white border-[#E5DFD3] text-[#2D2620]"
+                          }`}
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={feynmanStep === "grading"}
+                            onClick={startFeynmanRecording}
+                            className={`px-4 py-2.5 rounded-full text-xs font-semibold border cursor-pointer flex items-center gap-1.5 disabled:opacity-50 ${
+                              darkMode
+                                ? "border-white/15 bg-white/5 hover:bg-white/10 text-stone-200"
+                                : "border-[#E5DFD3] bg-[#F5F2EA] hover:bg-[#ECE7DA] text-[#3E362E]"
+                            }`}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" /> Thu âm lại
+                          </button>
+                          <button
+                            type="button"
+                            disabled={feynmanStep === "grading"}
+                            onClick={() => {
+                              setFeynmanStep("idle");
+                              setQuizModalOpen(true);
+                            }}
+                            className={`px-4 py-2.5 rounded-full text-xs font-semibold border cursor-pointer flex items-center gap-1.5 disabled:opacity-50 ${
+                              darkMode
+                                ? "border-white/15 bg-white/5 hover:bg-white/10 text-amber-300"
+                                : "border-amber-600/30 bg-amber-50 hover:bg-amber-100 text-amber-800"
+                            }`}
+                          >
+                            <BrainCircuit className="w-3.5 h-3.5" /> Chuyển sang Quiz 5 câu
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={feynmanStep === "grading" || !editableTranscript.trim()}
+                          onClick={handleEvaluateTranscript}
+                          className="px-6 py-3 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] disabled:opacity-50 text-white text-sm font-semibold shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                        >
+                          {feynmanStep === "grading" ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" /> AI đang chấm & cấp Proof...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-4 h-4" /> Gửi AI chấm điểm & Cấp Proof
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* D. MÀN HÌNH THIẾT LẬP PHIÊN HỌC (IDLE) */}
+              {isFocusIdle && (
+                <>
                   <div
-                    className={`p-3 rounded-2xl border space-y-2 ${
+                    className={`w-full max-w-[580px] rounded-[32px] p-7 sm:p-9 border transition-all duration-300 ${
                       darkMode
-                        ? "bg-[#181715] border-white/5"
-                        : "bg-[#F7F4EC] border-[#E8E2D5]"
+                        ? "bg-[#211F1D] border-white/10 shadow-2xl"
+                        : "bg-[#FCFBF7] border-[#EAE4D7] shadow-[0_16px_48px_rgba(45,38,32,0.07)]"
                     }`}
                   >
-                    <div className="flex items-center justify-between text-xs font-bold">
-                      <span className="flex items-center gap-1.5 text-[#6E8E72]">
-                        <UserCheck className="w-3.5 h-3.5" /> Bạn
-                      </span>
-                      <span className="text-[10px] text-emerald-600">
-                        {isStudying ? "Đang học" : "Sẵn sàng"}
-                      </span>
+                    {/* Chủ đề phiên học (In đậm, tự do nhập, không ép mặc định) */}
+                    <div className="mb-5 space-y-2">
+                      <label
+                        className={`block text-sm font-bold pl-1 ${darkMode ? "text-stone-200" : "text-[#2D2620]"}`}
+                      >
+                        Chủ đề học tập hôm nay
+                      </label>
+                      <input
+                        value={studyTopic}
+                        onChange={(e) => setStudyTopic(e.target.value)}
+                        placeholder="Nhập môn học hoặc chủ đề bạn muốn học hôm nay (vd: Giải tích, Lập trình Web3, Triết học...)"
+                        className={`w-full h-14 px-5 rounded-2xl border-2 text-lg sm:text-xl font-bold placeholder:font-normal placeholder:text-sm sm:placeholder:text-base focus:outline-none focus:border-[#6E8E72] focus:ring-2 focus:ring-[#6E8E72]/20 transition-all ${
+                          darkMode
+                            ? "bg-[#181715] border-white/15 text-[#F3EFE6] placeholder:text-stone-500"
+                            : "bg-white border-[#E0D9CA] text-[#2D2620] placeholder:text-[#9A9084]"
+                        }`}
+                      />
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        <span className="text-[11px] opacity-65 mr-1">Gợi ý nhanh:</span>
+                        {TOPIC_PRESETS.map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setStudyTopic(preset)}
+                            className={`text-[11px] px-2.5 py-0.5 rounded-full border cursor-pointer transition-colors ${
+                              studyTopic === preset
+                                ? "bg-[#6E8E72]/20 border-[#6E8E72] text-[#6E8E72] font-semibold"
+                                : darkMode
+                                  ? "border-white/10 text-stone-400 hover:text-stone-200"
+                                  : "border-[#E6E0D4] text-[#7A7167] hover:bg-[#F3EFE6]"
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="aspect-video rounded-xl bg-black/10 flex items-center justify-center font-mono text-xs">
-                      {isStudying ? formatTime(secondsLeft) : "0.01 AVAX"}
+
+                    {/* Hai ô điều chỉnh Study Time & Break Time */}
+                    <div className="grid grid-cols-2 gap-4 mb-5">
+                      <div className="space-y-1.5">
+                        <label
+                          className={`block text-xs font-medium pl-1 ${darkMode ? "text-stone-400" : "text-[#6E655C]"}`}
+                        >
+                          Thời gian học (phút)
+                        </label>
+                        <div
+                          className={`flex items-center justify-between h-11 px-4 rounded-full border transition-colors ${
+                            darkMode
+                              ? "bg-[#181715] border-white/10"
+                              : "bg-[#F6F3EB] border-[#E6E0D4]"
+                          }`}
+                        >
+                          <button
+                            onClick={() => handleAdjustStudyTime(-5)}
+                            className="p-1.5 rounded-full hover:bg-black/5 transition-transform active:scale-90 cursor-pointer"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="font-bold text-sm tabular-nums">
+                            {studyMinutes}
+                          </span>
+                          <button
+                            onClick={() => handleAdjustStudyTime(5)}
+                            className="p-1.5 rounded-full hover:bg-black/5 transition-transform active:scale-90 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label
+                          className={`block text-xs font-medium pl-1 ${darkMode ? "text-stone-400" : "text-[#6E655C]"}`}
+                        >
+                          Nghỉ giải lao (phút)
+                        </label>
+                        <div
+                          className={`flex items-center justify-between h-11 px-4 rounded-full border transition-colors ${
+                            darkMode
+                              ? "bg-[#181715] border-white/10"
+                              : "bg-[#F6F3EB] border-[#E6E0D4]"
+                          }`}
+                        >
+                          <button
+                            onClick={() =>
+                              setBreakMinutes(Math.max(1, breakMinutes - 1))
+                            }
+                            className="p-1.5 rounded-full hover:bg-black/5 transition-transform active:scale-90 cursor-pointer"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="font-bold text-sm tabular-nums">
+                            {breakMinutes}
+                          </span>
+                          <button
+                            onClick={() =>
+                              setBreakMinutes(Math.min(30, breakMinutes + 1))
+                            }
+                            className="p-1.5 rounded-full hover:bg-black/5 transition-transform active:scale-90 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[10px] opacity-65 pl-1">
+                          Nghỉ ngắn giữa phiên — Camera AI tắt, cọc vẫn an toàn
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-[10px] font-mono opacity-70 truncate">
-                      {address
-                        ? `${address.slice(0, 6)}...${address.slice(-4)}`
-                        : "Chưa kết nối"}
+
+                    {/* Smart Session Recovery Banner (khi lỡ F5 / thoát web nhưng ví vẫn đang stake) */}
+                    {isConnected && hasActiveOnChainSession && (
+                      <div className="mb-5 p-4 rounded-2xl border border-emerald-500/45 bg-emerald-500/10 text-xs space-y-3">
+                        <div>
+                          <div className="font-bold text-sm text-emerald-700 dark:text-emerald-300">
+                            ⚡ Phiên cọc 0.01 AVAX của bạn đang được bảo vệ trên Fuji!
+                          </div>
+                          <p className="text-[11px] opacity-85 mt-0.5 leading-relaxed">
+                            Mục tiêu contract: {onChainTargetMinutes} phút. Nếu lỡ thoát web bạn không hề bị mất cọc — hãy chọn tiếp tục học hoặc hoàn thành đánh giá để rút cọc ngay (sau khi rút xong có thể học tiếp phiên mới bình thường).
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={handleResumeExistingSession}
+                            className="px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Play className="w-3.5 h-3.5" /> Tiếp tục phiên học
+                          </button>
+                          <button
+                            onClick={() => setShowAssessmentChoice(true)}
+                            className="px-4 py-2 rounded-full bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            🔓 Kết thúc & Rút cọc ngay
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Đồng hồ tròn + Hộp Vault */}
+                    <div className="flex flex-col items-center">
+                      <span className="px-4 py-1 rounded-full text-xs font-medium tracking-wide bg-[#6E8E72] text-white mb-4">
+                        Sẵn sàng vào phiên học
+                      </span>
+
+                      <div className="relative w-60 h-60 flex items-center justify-center my-1">
+                        <svg
+                          className="w-full h-full -rotate-90 transform"
+                          viewBox="0 0 256 256"
+                        >
+                          <circle
+                            cx="128"
+                            cy="128"
+                            r={circleRadius}
+                            stroke={darkMode ? "rgba(255,255,255,0.08)" : "#EFECE4"}
+                            strokeWidth="8"
+                            fill="transparent"
+                          />
+                          <circle
+                            cx="128"
+                            cy="128"
+                            r={circleRadius}
+                            stroke="#6E8E72"
+                            strokeWidth="8"
+                            strokeDasharray={circleCircumference}
+                            strokeDashoffset={strokeDashoffset}
+                            strokeLinecap="round"
+                            fill="transparent"
+                          />
+                        </svg>
+
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-5xl sm:text-6xl font-bold tracking-wider tabular-nums font-mono">
+                            {formatTime(secondsLeft)}
+                          </span>
+                          <span className="text-[11px] opacity-60 mt-1.5 flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-[#6E8E72]" />
+                            Cọc cam kết: 0.01 AVAX
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`mt-4 w-full p-3.5 rounded-2xl border text-xs space-y-1 ${
+                          darkMode
+                            ? "bg-[#181715] border-white/5 text-stone-300"
+                            : "bg-[#F7F4EC] border-[#E8E2D5] text-[#5C5349]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-semibold">
+                          <span className="flex items-center gap-1.5 text-[#6E8E72]">
+                            <ShieldCheck className="w-3.5 h-3.5" /> Nơi nạp cọc:
+                            StudyStakeVault
+                          </span>
+                          <span className="font-mono text-[10px] opacity-75">
+                            {CONTRACTS.VAULT.slice(0, 6)}...{CONTRACTS.VAULT.slice(-4)}
+                          </span>
+                        </div>
+                        <p className="text-[11px] opacity-80 leading-relaxed">
+                          0.01 AVAX được khóa an toàn trên Avalanche Fuji. Hệ thống hoàn cọc 100% + học bổng x402 + điểm EXP SBT khi hoàn thành!
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-center gap-2.5 w-full mt-5">
+                        <button
+                          onClick={handleStartSession}
+                          disabled={isStakingTx}
+                          className="px-7 py-3 rounded-full bg-[#6E8E72] hover:bg-[#5d7a61] disabled:opacity-60 text-white text-sm font-medium shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                        >
+                          {isStakingTx ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" /> Đang xác nhận trên Fuji...
+                            </>
+                          ) : hasActiveOnChainSession ? (
+                            "Tiếp tục phiên đã Stake"
+                          ) : (
+                            "Start (Stake 0.01 AVAX)"
+                          )}
+                        </button>
+
+                        {hasActiveOnChainSession && (
+                          <button
+                            onClick={() => setShowAssessmentChoice(true)}
+                            className={`px-4 py-3 rounded-full text-xs font-medium border cursor-pointer flex items-center gap-1.5 ${
+                              darkMode
+                                ? "bg-white/5 border-white/15 text-amber-300 hover:bg-white/10"
+                                : "bg-amber-50 border-amber-500/30 text-amber-800 hover:bg-amber-100"
+                            }`}
+                          >
+                            <BrainCircuit className="w-3.5 h-3.5" /> Mở bài kiểm tra rút cọc
+                          </button>
+                        )}
+
+                        <button
+                          onClick={handleResetOrChange}
+                          className={`px-5 py-3 rounded-full text-sm font-medium border transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                            darkMode
+                              ? "bg-white/5 border-white/10 text-stone-300 hover:bg-white/10"
+                              : "bg-[#F6F3EB] border-[#E6E0D4] text-[#3E362E] hover:bg-[#ECE7DA]"
+                          }`}
+                        >
+                          Reset
+                        </button>
+                      </div>
+
+                      <div className="mt-5 pt-4 border-t border-black/5 dark:border-white/5 w-full flex items-center justify-between text-xs">
+                        <button
+                          onClick={() => {
+                            setStudyMinutes(1);
+                            setSecondsLeft(60);
+                          }}
+                          className="text-[#8C8275] hover:text-[#6E8E72] underline underline-offset-4 cursor-pointer"
+                        >
+                          Đặt nhanh 1 phút (Demo)
+                        </button>
+                        <button
+                          onClick={() => setShowGuideModal(true)}
+                          className="text-[#6E8E72] font-medium flex items-center gap-0.5 hover:underline cursor-pointer"
+                        >
+                          Xem quy trình 4 bước <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Các Peers */}
-                  {groupPeers.map((peer) => (
+                  {/* KHU VỰC PHÒNG HỌC NHÓM (STUDY GUILD) */}
+                  {studyMode === "group" && (
                     <div
-                      key={peer.id}
-                      className={`p-3 rounded-2xl border space-y-2 ${
+                      className={`w-full max-w-3xl rounded-[28px] p-6 border space-y-4 animate-in fade-in duration-300 ${
                         darkMode
-                          ? "bg-[#181715] border-white/5"
-                          : "bg-[#F7F4EC] border-[#E8E2D5]"
+                          ? "bg-[#211F1D] border-white/10"
+                          : "bg-[#FCFBF7] border-[#EAE4D7] shadow-sm"
                       }`}
                     >
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="truncate">{peer.name}</span>
-                        <span className="text-[10px] text-emerald-600">
-                          {peer.status}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-semibold text-sm flex items-center gap-2">
+                            <Users className="w-4 h-4 text-[#6E8E72]" /> Thành viên
+                            đang học chung phòng
+                          </h3>
+                          <p
+                            className={`text-xs ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
+                          >
+                            Cả phòng cùng cam kết cọc AVAX để giữ kỷ luật học tập.
+                          </p>
+                        </div>
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">
+                          🟢 Tỷ lệ kỷ luật: 98.2%
                         </span>
                       </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                        <div
+                          className={`p-3 rounded-2xl border space-y-2 ${
+                            darkMode
+                              ? "bg-[#181715] border-white/5"
+                              : "bg-[#F7F4EC] border-[#E8E2D5]"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-xs font-bold">
+                            <span className="flex items-center gap-1.5 text-[#6E8E72]">
+                              <UserCheck className="w-3.5 h-3.5" /> Bạn
+                            </span>
+                            <span className="text-[10px] text-emerald-600">
+                              Sẵn sàng
+                            </span>
+                          </div>
+                          <div className="aspect-video rounded-xl bg-black/10 flex items-center justify-center font-mono text-xs">
+                            0.01 AVAX
+                          </div>
+                          <div className="text-[10px] font-mono opacity-70 truncate">
+                            {address
+                              ? `${address.slice(0, 6)}...${address.slice(-4)}`
+                              : "Chưa kết nối"}
+                          </div>
+                        </div>
+
+                        {groupPeers.map((peer) => (
+                          <div
+                            key={peer.id}
+                            className={`p-3 rounded-2xl border space-y-2 ${
+                              darkMode
+                                ? "bg-[#181715] border-white/5"
+                                : "bg-[#F7F4EC] border-[#E8E2D5]"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between text-xs font-semibold">
+                              <span className="truncate">{peer.name}</span>
+                              <span className="text-[10px] text-emerald-600">
+                                {peer.status}
+                              </span>
+                            </div>
+                            <div
+                              className={`aspect-video rounded-xl bg-gradient-to-br ${peer.avatarBg} text-white flex flex-col items-center justify-center p-2 text-center`}
+                            >
+                              <span className="font-mono font-bold text-sm">
+                                {peer.minsLeft}m
+                              </span>
+                              <span className="text-[9px] line-clamp-1 opacity-90">
+                                {peer.topic}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] opacity-70">
+                              <span className="truncate">{peer.school}</span>
+                              <span className="font-mono">{peer.address}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
                       <div
-                        className={`aspect-video rounded-xl bg-gradient-to-br ${peer.avatarBg} text-white flex flex-col items-center justify-center p-2 text-center`}
+                        className={`text-[11px] p-2.5 rounded-xl border flex items-center justify-between ${
+                          darkMode
+                            ? "bg-black/30 border-white/5 text-stone-400"
+                            : "bg-[#F3EFE6] border-[#E5DFD3] text-[#6E655C]"
+                        }`}
                       >
-                        <span className="font-mono font-bold text-sm">
-                          {peer.minsLeft}m
+                        <span className="flex items-center gap-1.5">
+                          <Flame className="w-3.5 h-3.5 text-amber-500" />
+                          <strong>Hoạt động nhóm:</strong> Alex Nguyễn vừa hoàn thành
+                          phiên (+0.011 AVAX) • Minh Trần vừa lên Level 2 SBT!
                         </span>
-                        <span className="text-[9px] line-clamp-1 opacity-90">
-                          {peer.topic}
+                        <span className="text-[10px] font-mono text-[#6E8E72]">
+                          Sync ✔
                         </span>
-                      </div>
-                      <div className="flex items-center justify-between text-[10px] opacity-70">
-                        <span className="truncate">{peer.school}</span>
-                        <span className="font-mono">{peer.address}</span>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  )}
 
-                <div
-                  className={`text-[11px] p-2.5 rounded-xl border flex items-center justify-between ${
-                    darkMode
-                      ? "bg-black/30 border-white/5 text-stone-400"
-                      : "bg-[#F3EFE6] border-[#E5DFD3] text-[#6E655C]"
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Flame className="w-3.5 h-3.5 text-amber-500" />
-                    <strong>Hoạt động nhóm:</strong> Alex Nguyễn vừa hoàn thành
-                    phiên (+0.011 AVAX) • Minh Trần vừa lên Level 2 SBT!
-                  </span>
-                  <span className="text-[10px] font-mono text-[#6E8E72]">
-                    Sync ✔
-                  </span>
-                </div>
-              </div>
-            )}
+                  {/* 3 Thẻ Tóm tắt Tính năng nổi bật */}
+                  <div className="grid sm:grid-cols-3 gap-3.5 w-full max-w-3xl pt-2">
+                    {[
+                      {
+                        icon: Eye,
+                        title: "Edge-AI Studio Màn Hình Lớn",
+                        desc: "Nhận diện tư thế cúi viết, đọc sách, phân biệt đưa 2 tay lên đầu suy nghĩ & tránh cảnh báo nhầm điện thoại.",
+                      },
+                      {
+                        icon: Mic,
+                        title: "Tự Chọn Feynman hoặc Quiz",
+                        desc: "Hết giờ được chọn nói tóm tắt (nghe lại & sửa văn bản AI), làm Quiz 5 câu hoặc nghỉ giải lao ngắn.",
+                      },
+                      {
+                        icon: Coins,
+                        title: "Học bổng x402 & EXP SBT",
+                        desc: "Hoàn cọc an toàn ngay cả khi lỡ thoát web, minh bạch thưởng x402 và nâng cấp Huy hiệu NFT.",
+                      },
+                    ].map((feat) => {
+                      const Icon = feat.icon;
+                      return (
+                        <div
+                          key={feat.title}
+                          className={`p-4 rounded-2xl border transition-all duration-300 hover:-translate-y-1 ${
+                            darkMode
+                              ? "bg-[#211F1D]/80 border-white/10 hover:border-[#6E8E72]/50"
+                              : "bg-[#FCFBF7] border-[#EAE4D7] hover:border-[#6E8E72]/60 shadow-2xs"
+                          }`}
+                        >
+                          <div className="w-8 h-8 rounded-xl bg-[#6E8E72]/15 text-[#6E8E72] flex items-center justify-center mb-2.5">
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <h3 className="text-xs font-bold mb-1">{feat.title}</h3>
+                          <p
+                            className={`text-[11px] leading-relaxed ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
+                          >
+                            {feat.desc}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
-            {/* 3 Thẻ Tóm tắt Tính năng nổi bật */}
-            {!isStudying && !isRecordingFeynman && (
-              <div className="grid sm:grid-cols-3 gap-3.5 w-full max-w-3xl pt-2">
-                {[
-                  {
-                    icon: Eye,
-                    title: "Edge-AI Giám sát tự nhiên",
-                    desc: "Nhận diện tư thế cúi viết, đọc sách. Tự động nhắc nhở nếu cầm điện thoại.",
-                  },
-                  {
-                    icon: Mic,
-                    title: "Phản tư Feynman 30s",
-                    desc: "Nói tóm tắt cuối giờ để AI chấm điểm hiểu bài và tự động sinh Flashcard.",
-                  },
-                  {
-                    icon: Coins,
-                    title: "Học bổng x402 & SBT",
-                    desc: "Nhận vi thanh toán AVAX theo phút và nâng cấp Huy hiệu NFT không thể làm giả.",
-                  },
-                ].map((feat) => {
-                  const Icon = feat.icon;
-                  return (
-                    <div
-                      key={feat.title}
-                      className={`p-4 rounded-2xl border transition-all duration-300 hover:-translate-y-1 ${
-                        darkMode
-                          ? "bg-[#211F1D]/80 border-white/10 hover:border-[#6E8E72]/50"
-                          : "bg-[#FCFBF7] border-[#EAE4D7] hover:border-[#6E8E72]/60 shadow-2xs"
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-[#6E8E72]/15 text-[#6E8E72] flex items-center justify-center mb-2.5">
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      <h3 className="text-xs font-bold mb-1">{feat.title}</h3>
-                      <p
-                        className={`text-[11px] leading-relaxed ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
-                      >
-                        {feat.desc}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 2. TAB HUY HIỆU SOULBOUND (SKILL TREE) & BOUNTY POOL */}
+        {/* 2. TAB HUY HIỆU SOULBOUND (SKILL TREE), x402 & REWARD MARKETPLACE */}
         {activeSpace === "sanctuary" && (
           <div className="w-full max-w-3xl space-y-5 animate-in fade-in duration-300">
             <div className="text-center space-y-1">
@@ -1374,7 +2557,7 @@ export default function MindSparkInteractiveStudio() {
                     : "bg-[#FCFBF7] border-[#EAE4D7] shadow-sm"
                 }`}
               >
-                <div className="w-44 h-44 rounded-2xl overflow-hidden bg-[#F3EFE6] border border-[#E5DFD3] flex items-center justify-center">
+                <div className="w-44 h-44 rounded-2xl overflow-hidden bg-[#0f172a] border border-[#E5DFD3] flex items-center justify-center">
                   {sbtSvgImage ? (
                     <img
                       src={sbtSvgImage}
@@ -1382,23 +2565,26 @@ export default function MindSparkInteractiveStudio() {
                       className="w-full h-full object-contain"
                     />
                   ) : (
-                    <div className="space-y-2 p-4">
-                      <ShieldCheck className="w-12 h-12 text-[#6E8E72] mx-auto" />
-                      <div className="text-xs text-[#7A7167]">
-                        Dynamic On-Chain SBT
+                    <div className="space-y-2 p-4 text-center text-slate-200">
+                      <ShieldCheck className="w-12 h-12 text-[#CD7F32] mx-auto" />
+                      <div className="text-xs font-bold">LVL {sbtLevel} PREVIEW</div>
+                      <div className="text-[10px] text-slate-400">
+                        Hoàn thành 1 phiên để mint thẻ SBT thật on-chain
                       </div>
                     </div>
                   )}
                 </div>
                 <div>
                   <span className="text-[11px] uppercase tracking-widest text-[#6E8E72] font-semibold">
-                    Soulbound Skill Tree
+                    {userHasPersonalBadge
+                      ? `Soulbound Token #${studentBadgeId?.toString()}`
+                      : "Soulbound Skill Tree"}
                   </span>
                   <h3 className="text-xl font-bold mt-0.5">
                     Scholar Level {sbtLevel}
                   </h3>
                   <p className="text-xs text-[#8C8275] mt-1">
-                    Tích lũy {sbtMinutes} phút nỗ lực nhận thức
+                    {sbtMinutes} phút • {sbtSessions} phiên • TB {sbtAvgScore || 0}/100
                   </p>
                 </div>
               </div>
@@ -1446,20 +2632,86 @@ export default function MindSparkInteractiveStudio() {
                         className={`p-2.5 rounded-2xl border transition-transform hover:scale-105 ${
                           sbtLevel >= Number(tier.lv.replace("Lv.", ""))
                             ? "bg-[#6E8E72]/15 border-[#6E8E72]/40 font-semibold"
-                            : "bg-[#F3EFE6]/60 border-[#E5DFD3] opacity-60"
+                            : darkMode
+                              ? "bg-white/5 border-white/10 opacity-55"
+                              : "bg-[#F3EFE6]/60 border-[#E5DFD3] opacity-60"
                         }`}
                       >
                         <div
                           className={`w-2.5 h-2.5 rounded-full mx-auto mb-1.5 ${tier.color}`}
                         />
                         <div>{tier.lv}</div>
-                        <div className="text-[10px] opacity-80">
-                          {tier.name}
-                        </div>
+                        <div className="text-[10px] opacity-80">{tier.name}</div>
                       </div>
                     ))}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* KHU VỰC ĐỔI QUÀ NHÀ TÀI TRỢ (REWARD MARKETPLACE - FR-4.3 & MU-24) */}
+            <div
+              className={`rounded-[28px] p-6 border space-y-4 ${
+                darkMode
+                  ? "bg-[#211F1D] border-white/10"
+                  : "bg-[#FCFBF7] border-[#EAE4D7] shadow-sm"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <Gift className="w-4 h-4 text-[#E84142]" /> Reward Marketplace (Quyền lợi SBT)
+                  </h3>
+                  <p className="text-xs opacity-75">
+                    Dùng cấp độ Soulbound NFT để mở khóa học bổng và voucher từ nhà tài trợ.
+                  </p>
+                </div>
+                <span className="text-xs font-semibold px-3 py-1 rounded-full bg-[#6E8E72]/15 text-[#6E8E72]">
+                  Cấp của bạn: Level {sbtLevel}
+                </span>
+              </div>
+
+              <div className="grid sm:grid-cols-3 gap-3">
+                {REWARD_MARKETPLACE.map((rw) => {
+                  const unlocked = sbtLevel >= rw.requiredLevel;
+                  const redeemed = redeemedRewards.includes(rw.id);
+                  return (
+                    <div
+                      key={rw.id}
+                      className={`p-4 rounded-2xl border flex flex-col justify-between space-y-3 ${
+                        darkMode
+                          ? "bg-[#181715] border-white/10"
+                          : "bg-[#F7F4EC] border-[#E8E2D5]"
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[10px] opacity-70">
+                          <span>{rw.sponsor}</span>
+                          <span className="font-semibold text-[#6E8E72]">{rw.pointsCost}</span>
+                        </div>
+                        <div className="text-xs font-bold leading-snug">{rw.title}</div>
+                      </div>
+
+                      {redeemed ? (
+                        <div className="text-[11px] font-mono bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 p-2 rounded-xl flex items-center justify-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> {rw.code}
+                        </div>
+                      ) : (
+                        <button
+                          disabled={!unlocked}
+                          onClick={() => handleRedeemReward(rw.id, rw.code)}
+                          className={`w-full py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            unlocked
+                              ? "bg-[#6E8E72] hover:bg-[#5d7a61] text-white"
+                              : "bg-black/10 dark:bg-white/5 opacity-50 cursor-not-allowed"
+                          }`}
+                        >
+                          {unlocked ? "Đổi quyền lợi" : `Yêu cầu Level ${rw.requiredLevel}`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1475,11 +2727,15 @@ export default function MindSparkInteractiveStudio() {
               <p
                 className={`text-xs ${darkMode ? "text-stone-400" : "text-[#7A7167]"}`}
               >
-                Nơi lưu trữ các thẻ ghi nhớ tự động sinh ra sau 30s phản tư
-                Feynman và hỏi đáp chuyên sâu qua giao thức x402.
+                Tự động tổng hợp thẻ từ Feynman 30s, Quiz Mode B và hỏi đáp
+                chuyên sâu qua giao thức x402 ({flashcards.length} thẻ đã lưu).
               </p>
             </div>
-            <FlashcardNotebook />
+            <FlashcardNotebook
+              darkMode={darkMode}
+              cards={flashcards}
+              onAddCard={(card) => appendFlashcards([card])}
+            />
           </div>
         )}
       </main>
@@ -1528,11 +2784,11 @@ export default function MindSparkInteractiveStudio() {
                 },
                 {
                   step: "Bước 2: Học tự nhiên với Edge-AI",
-                  desc: "Thoải mái cúi viết, đọc sách in. AI chạy cục bộ trên RAM nhận diện tư thế và chỉ nhắc nhở khi bạn cầm điện thoại.",
+                  desc: "Thoải mái cúi viết, đọc sách in. AI chạy cục bộ trên RAM nhận diện tư thế, chớp mắt và tự tạm dừng khi cầm điện thoại.",
                 },
                 {
-                  step: "Bước 3: Phản tư Feynman 30 giây",
-                  desc: "Cuối phiên học, nói tóm tắt kiến thức trong 30s. AI Agent chấm điểm hiểu bài và tự động tạo thẻ Flashcard.",
+                  step: "Bước 3: Phản tư Feynman 30s / Quiz",
+                  desc: "Cuối phiên học, nói tóm tắt kiến thức trong 30s hoặc trả lời Quiz 5 câu. AI chấm điểm và tự động tạo thẻ Flashcard.",
                 },
                 {
                   step: "Bước 4: Nhận thưởng x402 & SBT",
@@ -1573,212 +2829,6 @@ export default function MindSparkInteractiveStudio() {
         </div>
       )}
 
-      {/* CỬA SỔ CAMERA EDGE-AI GÓC PHẢI KHI ĐANG HỌC */}
-      {isStudying && (
-        <div
-          className={`fixed bottom-20 right-6 z-20 rounded-2xl p-3 w-72 border shadow-xl space-y-2.5 animate-in slide-in-from-bottom-4 ${
-            darkMode
-              ? "bg-[#211F1D] border-white/10"
-              : "bg-[#FCFBF7] border-[#E5DFD3]"
-          }`}
-        >
-          {/* Header trạng thái */}
-          <div className="flex items-center justify-between px-1 text-[11px]">
-            <div className="flex items-center gap-1.5 font-semibold">
-              <span
-                className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
-                  currentPose === "Phone Distraction"
-                    ? "bg-rose-500/15 text-rose-600 animate-pulse font-bold"
-                    : "bg-[#6E8E72]/15 text-[#6E8E72]"
-                }`}
-              >
-                <Eye className="w-3 h-3" />
-                {currentPose}
-              </span>
-              {isAutoDetect && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 font-mono flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                  Auto AI
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setIsAutoDetect(!isAutoDetect)}
-                className={`p-1 rounded-md text-[10px] transition-colors cursor-pointer ${
-                  isAutoDetect
-                    ? "text-[#6E8E72] hover:bg-[#6E8E72]/10 font-bold"
-                    : "text-stone-400 hover:bg-stone-500/10"
-                }`}
-                title={isAutoDetect ? "Đang bật AI Tự động từ camera" : "Đang ở chế độ Thủ công"}
-              >
-                <Cpu className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => setShowCameraPip(!showCameraPip)}
-                className="cursor-pointer text-stone-400 hover:text-stone-600 p-1"
-              >
-                {showCameraPip ? (
-                  <CameraOff className="w-3.5 h-3.5" />
-                ) : (
-                  <Camera className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          {showCameraPip && (
-            <div className="aspect-video rounded-xl overflow-hidden bg-black relative border border-white/10">
-              {/* Video hiển thị lật gương tự nhiên */}
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
-
-              {/* Lớp phủ HUD Trí tuệ nhân tạo (AI Computer Vision Overlay) */}
-              {cameraStatus === "active" && (
-                <div className="absolute inset-0 pointer-events-none p-2 flex flex-col justify-between">
-                  <div className="flex items-center justify-between text-[9px] font-mono">
-                    <span className="bg-black/60 backdrop-blur-xs text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1">
-                      <Activity className="w-2.5 h-2.5 animate-pulse" /> AI Vision Active
-                    </span>
-                    <span className="bg-black/60 backdrop-blur-xs text-white/80 px-1.5 py-0.5 rounded">
-                      Góc cúi: {headTiltAngle}°
-                    </span>
-                  </div>
-
-                  {/* Khung tâm ngắm tracking */}
-                  <div className="self-center w-20 h-14 border border-emerald-400/40 rounded-lg flex items-center justify-center relative">
-                    <div className="w-2 h-2 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
-                    <div className="w-2 h-2 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
-                    <div className="w-2 h-2 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
-                    <div className="w-2 h-2 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
-                    <span className="text-[8px] text-emerald-400/80 font-mono tracking-tighter">
-                      CONF: {postureConfidence}%
-                    </span>
-                  </div>
-
-                  <div className="text-[8px] text-white/60 font-mono text-right">
-                    Edge MediaPipe Vision
-                  </div>
-                </div>
-              )}
-
-              {/* Cảnh báo khi camera bị che cần gạt */}
-              {cameraStatus === "blocked" && (
-                <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center text-center p-2 text-stone-300">
-                  <AlertTriangle className="w-5 h-5 text-amber-400 mb-1" />
-                  <span className="text-[10px] font-bold text-amber-300">Camera đang tối / bị che</span>
-                  <p className="text-[9px] opacity-75 mt-0.5">
-                    Hãy mở cần gạt camera hoặc dùng 4 nút giả lập bên dưới.
-                  </p>
-                </div>
-              )}
-
-              {/* Cảnh báo khi lỗi quyền camera */}
-              {cameraStatus === "error" && (
-                <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center text-center p-2 text-stone-300">
-                  <CameraOff className="w-5 h-5 text-rose-400 mb-1" />
-                  <span className="text-[10px] font-bold text-rose-300">Chưa cấp quyền Camera</span>
-                  <p className="text-[9px] opacity-75 mt-0.5">
-                    Hãy cho phép webcam hoặc dùng 4 nút bên dưới để test.
-                  </p>
-                </div>
-              )}
-
-              {/* Lớp phủ cảnh báo xao nhãng điện thoại */}
-              {currentPose === "Phone Distraction" && (
-                <div className="absolute inset-0 bg-rose-950/80 flex flex-col items-center justify-center text-white text-center p-2 animate-pulse">
-                  <Smartphone className="w-6 h-6 mb-1 text-rose-400 animate-bounce" />
-                  <span className="text-xs font-bold text-rose-200">
-                    Cảnh báo cầm điện thoại!
-                  </span>
-                  <span className="text-[9px] text-rose-300 mt-0.5">
-                    Hãy tập trung để không bị trừ điểm Focus
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Thanh trạng thái Tự động / Giả lập */}
-          <div className="flex items-center justify-between text-[10px] px-1 pt-0.5">
-            <span className="text-stone-400 flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-[#6E8E72]" />
-              {isAutoDetect ? "Camera tự động phân loại tư thế" : "Đang chọn tư thế thủ công"}
-            </span>
-            {!isAutoDetect && (
-              <button
-                onClick={() => setIsAutoDetect(true)}
-                className="text-[#6E8E72] hover:underline font-semibold cursor-pointer"
-              >
-                Bật lại Auto AI
-              </button>
-            )}
-          </div>
-
-          {/* Bộ 4 nút: Vừa phục vụ bấm thủ công khi pitch bài, vừa tự highlight theo nhận diện camera */}
-          <div className="grid grid-cols-2 gap-1 text-[10px]">
-            <button
-              onClick={() => {
-                setCurrentPose("Writing Pose");
-                setIsAutoDetect(false);
-              }}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
-                currentPose === "Writing Pose"
-                  ? "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
-                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
-              }`}
-            >
-              <PenTool className="w-2.5 h-2.5" /> Cúi viết
-            </button>
-            <button
-              onClick={() => {
-                setCurrentPose("Reading Pose");
-                setIsAutoDetect(false);
-              }}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
-                currentPose === "Reading Pose"
-                  ? "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
-                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
-              }`}
-            >
-              <BookOpenCheck className="w-2.5 h-2.5" /> Đọc sách
-            </button>
-            <button
-              onClick={() => {
-                setCurrentPose("Screen Focus");
-                setIsAutoDetect(false);
-              }}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
-                currentPose === "Screen Focus"
-                  ? "bg-[#6E8E72] text-white border-[#6E8E72] shadow-xs font-semibold"
-                  : "bg-[#F3EFE6] dark:bg-white/5 text-[#5C5349] dark:text-stone-300 border-transparent hover:border-black/10"
-              }`}
-            >
-              <Monitor className="w-2.5 h-2.5" /> Màn hình
-            </button>
-            <button
-              onClick={() => {
-                setCurrentPose("Phone Distraction");
-                setIsAutoDetect(false);
-              }}
-              className={`py-1 px-1.5 rounded-lg flex items-center justify-center gap-1 border transition-all cursor-pointer ${
-                currentPose === "Phone Distraction"
-                  ? "bg-rose-600 text-white border-rose-600 shadow-xs font-semibold animate-pulse"
-                  : "bg-[#F3EFE6] dark:bg-white/5 text-rose-700 dark:text-rose-400 border-transparent hover:border-rose-400/30"
-              }`}
-            >
-              <Smartphone className="w-2.5 h-2.5" /> Điện thoại
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* THANH ĐIỀU HƯỚNG NỔI Ở DƯỚI CÙNG */}
       <nav
         className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 px-2.5 py-1.5 rounded-full border shadow-lg flex items-center gap-1.5 ${
@@ -1813,10 +2863,42 @@ export default function MindSparkInteractiveStudio() {
         })}
       </nav>
 
+      {/* MODAL KẾT QUẢ & CLAIM ON-CHAIN */}
       <ResultModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         sessionResult={sessionResult}
+        studyTopic={studyTopic}
+        focusIndex={focusIndex}
+        sbtLevel={sbtLevel}
+        onRetryFeynman={() => startFeynmanRecording()}
+        onSwitchToQuiz={() => {
+          setShowAssessmentChoice(false);
+          setFeynmanStep("idle");
+          setQuizModalOpen(true);
+        }}
+        onRequestDemoAttest={requestDemoAttestFromGateway}
+        onClaimSuccess={refreshOnChainState}
+        onOpenNotebook={() => setActiveSpace("notebook")}
+        onStartNewSession={() => {
+          setModalOpen(false);
+          refreshOnChainState();
+          handleResetOrChange();
+        }}
+      />
+
+      {/* MODAL QUIZ MODE B (DỰ PHÒNG / ÔN TẬP TRẮC NGHIỆM AI) */}
+      <QuizModal
+        open={quizModalOpen}
+        onClose={() => setQuizModalOpen(false)}
+        topic={studyTopic}
+        walletAddress={address || "0xA206B966480E6eeE2F3F96e6958899e71501B8e2"}
+        actualMinutes={studyMinutes}
+        completedMinutes={activeMinutesForModes}
+        darkMode={darkMode}
+        onTopicChange={(nextTopic) => setStudyTopic(nextTopic)}
+        onAddFlashcards={(cards) => appendFlashcards(cards)}
+        onCompleteToResult={handleQuizComplete}
       />
     </div>
   );

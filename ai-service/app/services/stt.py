@@ -31,17 +31,52 @@ logger = logging.getLogger("mindspark.stt")
 # Backoff giữa các lần retry (giây)
 _RETRY_BACKOFF = [1.0, 2.0]
 
+# Các câu hallucination phổ biến của Whisper khi nhận audio im lặng / nhiễu nền
+_SILENCE_HALLUCINATIONS = {
+    "thank you",
+    "thanks for watching",
+    "you",
+    "bye",
+    "subtitles by the amara org community",
+    "cảm ơn các bạn đã theo dõi",
+    "hẹn gặp lại các bạn trong những video tiếp theo",
+}
 
-async def transcribe(audio_bytes: bytes, filename: str = "audio.webm") -> str:
+_SILENCE_SUBSTRINGS = (
+    "đăng kí cho kênh",
+    "đăng ký kênh",
+    "để không bỏ lỡ những video hấp dẫn",
+    "ghiền mì gõ",
+    "lalaschool",
+)
+
+
+def _clean_whisper_transcript(raw: str) -> str:
+    """Chuẩn hóa transcript và loại bỏ ảo giác phổ biến khi file audio chỉ có im lặng."""
+    text = raw.strip()
+    normalized = text.lower().strip(" .,!?;:\"'()[]{}-…")
+    if normalized in _SILENCE_HALLUCINATIONS:
+        return ""
+    if any(marker in normalized for marker in _SILENCE_SUBSTRINGS):
+        return ""
+    return text
+
+
+async def transcribe(
+    audio_bytes: bytes,
+    filename: str = "audio.webm",
+    prompt: str | None = None,
+) -> str:
     """
     Chuyển audio bytes → chuỗi transcript (tự detect ngôn ngữ Việt/Anh).
 
     Args:
         audio_bytes: Nội dung file audio đọc vào RAM.
         filename: Tên file gốc (dùng để Groq nhận diện định dạng qua extension).
+        prompt: Ngữ cảnh chủ đề giúp Whisper nhận diện thuật ngữ chính xác hơn.
 
     Returns:
-        Chuỗi transcript đã strip whitespace.
+        Chuỗi transcript đã strip whitespace (trả về "" nếu chỉ là ảo giác im lặng).
 
     Raises:
         HTTPException 503 nếu Groq không phản hồi sau 2 lần retry.
@@ -55,8 +90,9 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.webm") -> str:
                 filename=filename,
                 model=settings.stt_model,
                 api_key=settings.groq_api_key,
+                prompt=prompt,
             )
-            return transcript.strip()
+            return _clean_whisper_transcript(transcript)
         except RateLimitError:
             # 429 — đợi rồi thử lại
             if attempt < 2:
@@ -110,6 +146,7 @@ async def _transcribe_groq(
     filename: str,
     model: str,
     api_key: str,
+    prompt: str | None = None,
 ) -> str:
     """
     Implementation thật dùng Groq Whisper.
@@ -128,17 +165,22 @@ async def _transcribe_groq(
         "wav":  "audio/wav",
         "mp3":  "audio/mpeg",
         "m4a":  "audio/mp4",
+        "mp4":  "audio/mp4",
         "ogg":  "audio/ogg",
     }
     content_type = content_type_map.get(ext, "audio/webm")
 
-    t0 = time.perf_counter()
-    response = await client.audio.transcriptions.create(
-        model=model,
-        file=(filename, audio_bytes, content_type),
+    create_kwargs: dict = {
+        "model": model,
+        "file": (filename, audio_bytes, content_type),
         # Không chỉ định language → Whisper tự detect (hỗ trợ Việt và Anh)
-        response_format="text",
-    )
+        "response_format": "text",
+    }
+    if prompt and prompt.strip():
+        create_kwargs["prompt"] = prompt.strip()[:220]
+
+    t0 = time.perf_counter()
+    response = await client.audio.transcriptions.create(**create_kwargs)
     elapsed = (time.perf_counter() - t0) * 1000
     logger.debug("Groq Whisper hoàn thành trong %.0f ms (model=%s)", elapsed, model)
 
