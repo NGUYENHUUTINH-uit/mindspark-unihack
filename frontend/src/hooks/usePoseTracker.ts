@@ -10,9 +10,21 @@ export type StudyPose =
   | "Phone Distraction"
   | "Drowsy / Absent";
 
-const PHONE_CONFIRM_FRAMES = 6; // 6 * 250ms = 1.5s cho heuristic tư thế dự phòng
-const ABSENT_CONFIRM_FRAMES = 6; // 6 * 250ms = 1.5s không thấy người -> Vắng mặt
-const PHONE_OBJECT_CONFIRM_TICKS = 2; // 2 nhịp ObjectDetector (~0.5-1.0s) xác nhận điện thoại
+export interface DetectedPhoneBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  score: number;
+}
+
+const PHONE_CONFIRM_FRAMES = 6; // Chỉ dùng khi ObjectDetector chưa khả dụng
+const ABSENT_CONFIRM_FRAMES = 8; // 8 * 250ms = 2.0s mất người hoàn toàn -> Vắng mặt
+const PHONE_STRONG_SCORE = 0.34; // Xác nhận ngay (~0.5s) nếu độ tin cậy rõ
+const PHONE_SOFT_SCORE = 0.2; // 2 lần trong cửa sổ 2s -> xác nhận điện thoại nghiêng/ốp tối
+const REMOTE_HAND_SCORE = 0.32; // Bắt nhãn "remote" khi tay đang nâng gần khung hình
+const PHONE_HOLD_MS = 1200; // Giữ 1.2s tránh nhấp nháy reset timer khi rung tay
+const LIVENESS_STATIC_FRAMES = 60; // 60 * 250ms = 15s bất động hoàn toàn mới nghi ngờ ảnh tĩnh
 
 export type CameraStatus = "idle" | "active" | "error" | "blocked";
 
@@ -22,7 +34,7 @@ export interface UsePoseTrackerOptions {
   showCameraPip: boolean;
   /** Ngưỡng cảnh báo cầm điện thoại (giây). Mặc định 10s cho chế độ Demo (Spec thực tế: 60s). */
   distractionThresholdSec?: number;
-  /** Ngưỡng cảnh báo vắng mặt / ngủ gục (giây). Mặc định 15s cho Demo (Spec thực tế: 180s). */
+  /** Ngưỡng cảnh báo vắng mặt / ngủ gục (giây). Mặc định 15s cho chế độ Demo (Spec thực tế: 180s). */
   absenceThresholdSec?: number;
   /** Callback phát âm thanh cảnh báo khi vượt ngưỡng phân tâm / vắng mặt. */
   onAlertBeep?: (reason: "phone" | "absent") => void;
@@ -45,6 +57,8 @@ export interface UsePoseTrackerReturn {
   visionEngine: "mediapipe-wasm" | "edge-canvas";
   /** Model ObjectDetector nhận diện điện thoại & người đã sẵn sàng chưa. */
   hasPhoneDetector: boolean;
+  /** Khung chữ nhật chuẩn hóa (0..1) của điện thoại vừa phát hiện để vẽ lên UI. */
+  detectedPhoneBox: DetectedPhoneBox | null;
   /** Thời gian phân tâm điện thoại / vắng mặt liên tục (giây). */
   distractionSeconds: number;
   absenceSeconds: number;
@@ -63,7 +77,7 @@ const POSE_MODEL_URL =
 const FACE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const OBJECT_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite";
+  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite";
 
 export function usePoseTracker({
   videoRef,
@@ -84,6 +98,7 @@ export function usePoseTracker({
   const [blinkCount, setBlinkCount] = useState<number>(0);
   const [visionEngine, setVisionEngine] = useState<"mediapipe-wasm" | "edge-canvas">("edge-canvas");
   const [hasPhoneDetector, setHasPhoneDetector] = useState<boolean>(false);
+  const [detectedPhoneBox, setDetectedPhoneBox] = useState<DetectedPhoneBox | null>(null);
   const [distractionSeconds, setDistractionSeconds] = useState<number>(0);
   const [absenceSeconds, setAbsenceSeconds] = useState<number>(0);
   const [isDistractionAlert, setIsDistractionAlert] = useState<boolean>(false);
@@ -104,9 +119,11 @@ export function usePoseTracker({
   const wasBlinkingRef = useRef<boolean>(false);
   const absentFramesRef = useRef<number>(0);
   const phoneCandidateFramesRef = useRef<number>(0);
-  const phoneObjectStreakRef = useRef<number>(0);
+  const phoneHitTimestampsRef = useRef<number[]>([]);
+  const lastPhoneConfirmedAtRef = useRef<number>(0);
   const lastObjectPhoneScoreRef = useRef<number>(0);
   const lastObjectPersonRef = useRef<boolean>(true);
+  const prevLandmarkAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const lastVideoTsRef = useRef<number>(0);
   const frameTickRef = useRef<number>(0);
   const isProcessingFrameRef = useRef<boolean>(false);
@@ -122,9 +139,12 @@ export function usePoseTracker({
     setLivenessScore(96);
     absentFramesRef.current = 0;
     phoneCandidateFramesRef.current = 0;
-    phoneObjectStreakRef.current = 0;
+    phoneHitTimestampsRef.current = [];
+    lastPhoneConfirmedAtRef.current = 0;
     lastObjectPhoneScoreRef.current = 0;
     lastObjectPersonRef.current = true;
+    prevLandmarkAnchorRef.current = null;
+    setDetectedPhoneBox(null);
     if (pose !== "Phone Distraction" && pose !== "Drowsy / Absent") {
       setDistractionSeconds(0);
       setAbsenceSeconds(0);
@@ -141,6 +161,7 @@ export function usePoseTracker({
     setIsLiveSubject(true);
     setLivenessScore(96);
     setBlinkCount(0);
+    setDetectedPhoneBox(null);
     setDistractionSeconds(0);
     setAbsenceSeconds(0);
     setIsDistractionAlert(false);
@@ -148,12 +169,14 @@ export function usePoseTracker({
     staticFramesRef.current = 0;
     absentFramesRef.current = 0;
     phoneCandidateFramesRef.current = 0;
-    phoneObjectStreakRef.current = 0;
+    phoneHitTimestampsRef.current = [];
+    lastPhoneConfirmedAtRef.current = 0;
     lastObjectPhoneScoreRef.current = 0;
     lastObjectPersonRef.current = true;
+    prevLandmarkAnchorRef.current = null;
   }, []);
 
-  // 1. Nạp MediaPipe PoseLandmarker, FaceLandmarker & ObjectDetector (nhận diện điện thoại + người thật)
+  // 1. Nạp MediaPipe PoseLandmarker, FaceLandmarker & ObjectDetector (float16 nhạy vật thể nhỏ)
   useEffect(() => {
     if (!isStudying || !isAutoDetect) return;
     let cancelled = false;
@@ -177,9 +200,9 @@ export function usePoseTracker({
           vision.ObjectDetector.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: OBJECT_MODEL_URL, delegate: "CPU" },
             runningMode: "VIDEO",
-            scoreThreshold: 0.3,
-            maxResults: 5,
-            categoryAllowlist: ["cell phone", "person"],
+            scoreThreshold: 0.2,
+            maxResults: 6,
+            categoryAllowlist: ["cell phone", "remote", "person"],
           })
             .then((objDet: any) => {
               if (!cancelled) {
@@ -304,56 +327,55 @@ export function usePoseTracker({
         lastVideoTsRef.current = nowMs;
         frameTickRef.current += 1;
 
-        // Nhận diện vật thể thật ("cell phone" & "person") mỗi 500ms (2 FPS) để nhẹ CPU
-        if (objectDetectorRef.current && frameTickRef.current % 2 === 1) {
-          try {
-            const objRes = objectDetectorRef.current.detectForVideo(video, nowMs);
-            const detections = objRes?.detections ?? [];
-            let maxPhoneScore = 0;
-            let foundPerson = false;
-
-            for (const det of detections) {
-              const cats = det?.categories ?? [];
-              for (const cat of cats) {
-                const name = String(
-                  cat?.categoryName ?? cat?.displayName ?? ""
-                ).toLowerCase();
-                const score = Number(cat?.score ?? 0);
-                if (name === "cell phone" && score >= 0.3 && score > maxPhoneScore) {
-                  maxPhoneScore = score;
-                }
-                if (name === "person" && score >= 0.38) {
-                  foundPerson = true;
-                }
-              }
-            }
-
-            if (maxPhoneScore >= 0.3) {
-              phoneObjectStreakRef.current = Math.min(
-                6,
-                phoneObjectStreakRef.current + 1
-              );
-              lastObjectPhoneScoreRef.current = maxPhoneScore;
-            } else {
-              phoneObjectStreakRef.current = Math.max(
-                0,
-                phoneObjectStreakRef.current - 1
-              );
-              if (phoneObjectStreakRef.current === 0) {
-                lastObjectPhoneScoreRef.current = 0;
-              }
-            }
-            lastObjectPersonRef.current = foundPerson;
-          } catch {
-            // Bỏ qua lỗi frame đơn lẻ của ObjectDetector
-          }
-        }
-
         // --- Nhánh A: Dùng MediaPipe WASM thật nếu đã nạp thành công ---
         if (poseLandmarkerRef.current) {
           try {
             const poseRes = poseLandmarkerRef.current.detectForVideo(video, nowMs);
             const lm = poseRes?.landmarks?.[0];
+
+            const shoulderMidY =
+              lm && lm.length >= 17 ? (lm[11].y + lm[12].y) / 2 : 0.65;
+            const leftVis = Boolean(
+              lm && lm.length >= 17 && (lm[15]?.visibility ?? 0) > 0.35
+            );
+            const rightVis = Boolean(
+              lm && lm.length >= 17 && (lm[16]?.visibility ?? 0) > 0.35
+            );
+            const hasRaisedHand = Boolean(
+              lm &&
+                lm.length >= 17 &&
+                ((leftVis && lm[15].y < shoulderMidY + 0.16) ||
+                  (rightVis && lm[16].y < shoulderMidY + 0.16))
+            );
+            const hasSeatedUpperBody = Boolean(
+              lm &&
+                lm.length >= 17 &&
+                (lm[11]?.visibility ?? 0) > 0.5 &&
+                (lm[12]?.visibility ?? 0) > 0.5 &&
+                lm[11].x > 0.01 &&
+                lm[11].x < 0.99 &&
+                lm[12].x > 0.01 &&
+                lm[12].x < 0.99 &&
+                lm[11].y > 0.05 &&
+                lm[11].y < 0.99 &&
+                lm[12].y > 0.05 &&
+                lm[12].y < 0.99 &&
+                Math.abs(lm[11].x - lm[12].x) > 0.12 &&
+                Math.abs(lm[11].y - lm[12].y) < 0.28
+            );
+
+            // Theo dõi vi chuyển động khung xương để không phạt oan người đọc/viết yên
+            if (lm && lm.length >= 17) {
+              const anchor = { x: lm[0].x, y: lm[0].y };
+              if (prevLandmarkAnchorRef.current) {
+                const dx = Math.abs(anchor.x - prevLandmarkAnchorRef.current.x);
+                const dy = Math.abs(anchor.y - prevLandmarkAnchorRef.current.y);
+                if (dx + dy > 0.004) {
+                  staticFramesRef.current = 0;
+                }
+              }
+              prevLandmarkAnchorRef.current = anchor;
+            }
 
             // Kiểm tra Face presence & Blink Detection qua FaceLandmarker
             let hasFace = false;
@@ -378,42 +400,107 @@ export function usePoseTracker({
                 ) {
                   setBlinkCount((b) => b + 1);
                   lastBlinkTsRef.current = nowMs;
+                  staticFramesRef.current = 0;
                 }
                 wasBlinkingRef.current = isBlinkingNow;
               }
             }
 
+            // Nhận diện vật thể ("cell phone", "remote" kèm tay nâng & "person") mỗi 500ms (2 FPS)
+            if (objectDetectorRef.current && frameTickRef.current % 2 === 1) {
+              try {
+                const objRes = objectDetectorRef.current.detectForVideo(video, nowMs);
+                const detections = objRes?.detections ?? [];
+                let maxPhoneScore = 0;
+                let bestBox: any = null;
+                let foundPerson = false;
+
+                for (const det of detections) {
+                  const cats = det?.categories ?? [];
+                  for (const cat of cats) {
+                    const name = String(
+                      cat?.categoryName ?? cat?.displayName ?? ""
+                    ).toLowerCase();
+                    const score = Number(cat?.score ?? 0);
+                    if (name === "person" && score >= 0.25) {
+                      foundPerson = true;
+                    }
+                    const isCellPhone =
+                      name === "cell phone" && score >= PHONE_SOFT_SCORE;
+                    const isRaisedRemote =
+                      name === "remote" &&
+                      score >= REMOTE_HAND_SCORE &&
+                      hasRaisedHand;
+                    if ((isCellPhone || isRaisedRemote) && score > maxPhoneScore) {
+                      maxPhoneScore = score;
+                      bestBox = det?.boundingBox ?? null;
+                    }
+                  }
+                }
+
+                lastObjectPersonRef.current = foundPerson;
+
+                // Cửa sổ trượt 2000ms + grace hold 1.2s để tránh rớt nhịp khi rung tay
+                phoneHitTimestampsRef.current = phoneHitTimestampsRef.current.filter(
+                  (ts) => nowMs - ts <= 2000
+                );
+
+                if (maxPhoneScore >= PHONE_SOFT_SCORE) {
+                  phoneHitTimestampsRef.current.push(nowMs);
+                  const vw = video.videoWidth || 640;
+                  const vh = video.videoHeight || 480;
+                  const normBox: DetectedPhoneBox | null =
+                    bestBox && bestBox.width > 0 && bestBox.height > 0
+                      ? {
+                          x: Math.max(0, Math.min(1, bestBox.originX / vw)),
+                          y: Math.max(0, Math.min(1, bestBox.originY / vh)),
+                          w: Math.max(0.05, Math.min(1, bestBox.width / vw)),
+                          h: Math.max(0.05, Math.min(1, bestBox.height / vh)),
+                          score: maxPhoneScore,
+                        }
+                      : null;
+
+                  if (
+                    maxPhoneScore >= PHONE_STRONG_SCORE ||
+                    phoneHitTimestampsRef.current.length >= 2
+                  ) {
+                    lastPhoneConfirmedAtRef.current = nowMs;
+                    lastObjectPhoneScoreRef.current = maxPhoneScore;
+                    if (normBox) setDetectedPhoneBox(normBox);
+                  }
+                } else if (nowMs - lastPhoneConfirmedAtRef.current > PHONE_HOLD_MS) {
+                  setDetectedPhoneBox(null);
+                }
+              } catch {
+                // Bỏ qua lỗi frame đơn lẻ của ObjectDetector
+              }
+            }
+
             const phoneObjectConfirmed =
-              phoneObjectStreakRef.current >= PHONE_OBJECT_CONFIRM_TICKS;
-            const hasStrongUpperBody = Boolean(
-              lm &&
-                lm.length >= 17 &&
-                (lm[0]?.visibility ?? 0) > 0.65 &&
-                (lm[11]?.visibility ?? 0) > 0.65 &&
-                (lm[12]?.visibility ?? 0) > 0.65 &&
-                lm[0].x > 0.02 &&
-                lm[0].x < 0.98 &&
-                lm[0].y > 0.02 &&
-                lm[0].y < 0.98 &&
-                Math.abs(lm[11].x - lm[12].x) > 0.14
-            );
+              lastPhoneConfirmedAtRef.current > 0 &&
+              nowMs - lastPhoneConfirmedAtRef.current <= PHONE_HOLD_MS;
 
             const isHumanPresent = objectDetectorRef.current
-              ? hasFace || lastObjectPersonRef.current
+              ? hasFace ||
+                lastObjectPersonRef.current ||
+                (hasSeatedUpperBody &&
+                  (lm?.[0]?.visibility ?? 0) > 0.55 &&
+                  staticFramesRef.current < 16)
               : faceLandmarkerRef.current
-                ? hasFace || hasStrongUpperBody
-                : hasStrongUpperBody;
+                ? hasFace || hasSeatedUpperBody
+                : hasSeatedUpperBody;
 
             if (phoneObjectConfirmed) {
               absentFramesRef.current = 0;
               setPostureConfidence(
                 Math.round(
-                  Math.min(99, Math.max(85, lastObjectPhoneScoreRef.current * 100))
+                  Math.min(99, Math.max(82, lastObjectPhoneScoreRef.current * 100))
                 )
               );
               setCurrentPose("Phone Distraction");
             } else if (!isHumanPresent) {
               phoneCandidateFramesRef.current = 0;
+              setDetectedPhoneBox(null);
               absentFramesRef.current += 1;
               if (absentFramesRef.current >= ABSENT_CONFIRM_FRAMES) {
                 setCurrentPose("Drowsy / Absent");
@@ -424,36 +511,27 @@ export function usePoseTracker({
               const nose = lm[0];
               const leftEar = lm[7];
               const rightEar = lm[8];
-              const leftShoulder = lm[11];
-              const rightShoulder = lm[12];
               const leftWrist = lm[15];
               const rightWrist = lm[16];
 
-              const shoulderMidY = (leftShoulder.y + rightShoulder.y) / 2;
               const noseDrop = nose.y - shoulderMidY; // Càng lớn -> càng cúi đầu sâu
               const estimatedTilt = Math.round(
                 Math.min(68, Math.max(10, 32 + noseDrop * 120))
               );
               setHeadTiltAngle(estimatedTilt);
 
-              const leftVis = (leftWrist?.visibility ?? 0) > 0.45;
-              const rightVis = (rightWrist?.visibility ?? 0) > 0.45;
-
-              // Đưa 2 tay lên đầu / ôm trán / gãi đầu cao hơn trán -> Tư thế suy nghĩ/nghỉ ngơi, KHÔNG phải điện thoại
-              const leftOnOrAboveHead = leftVis && leftWrist.y <= nose.y + 0.04;
-              const rightOnOrAboveHead = rightVis && rightWrist.y <= nose.y + 0.04;
-              const bothHandsRaised =
+              // Siết chặt điều kiện Suy nghĩ: 2 tay ở thái dương tách ngang hoặc 1 tay gãi đỉnh đầu
+              const handsNearTemples =
                 leftVis &&
                 rightVis &&
-                leftWrist.y < shoulderMidY - 0.04 &&
-                rightWrist.y < shoulderMidY - 0.04;
-              const anyHandHighAboveForehead =
-                (leftVis && leftWrist.y < nose.y - 0.08) ||
-                (rightVis && rightWrist.y < nose.y - 0.08);
+                leftWrist.y <= nose.y + 0.06 &&
+                rightWrist.y <= nose.y + 0.06 &&
+                Math.abs(leftWrist.x - rightWrist.x) > 0.16;
+              const singleHandHighOnHead =
+                (leftVis && leftWrist.y < nose.y - 0.1) ||
+                (rightVis && rightWrist.y < nose.y - 0.1);
               const isThinkingOrHeadRest =
-                bothHandsRaised ||
-                (leftOnOrAboveHead && rightOnOrAboveHead) ||
-                anyHandHighAboveForehead;
+                handsNearTemples || singleHandHighOnHead;
 
               const isHandInPhoneZone = (wrist: any, ear: any, visible: boolean) => {
                 if (!visible || !ear) return false;
@@ -468,7 +546,14 @@ export function usePoseTracker({
 
               const leftPhone = isHandInPhoneZone(leftWrist, leftEar, leftVis);
               const rightPhone = isHandInPhoneZone(rightWrist, rightEar, rightVis);
-              const singleHandPhone = !isThinkingOrHeadRest && leftPhone !== rightPhone;
+
+              // Tắt heuristic đoán tay khi ObjectDetector đã sẵn sàng HOẶC đang cúi đầu viết bài
+              const allowPosePhoneFallback =
+                !objectDetectorRef.current && estimatedTilt < 34;
+              const singleHandPhone =
+                allowPosePhoneFallback &&
+                !isThinkingOrHeadRest &&
+                leftPhone !== rightPhone;
 
               const baseFocusPose: StudyPose =
                 estimatedTilt >= 34
@@ -505,7 +590,7 @@ export function usePoseTracker({
             } else {
               absentFramesRef.current = 0;
               setPostureConfidence(90);
-              setCurrentPose("Screen Focus");
+              setCurrentPose("Writing Pose");
             }
           } catch {
             // Tiếp tục xuống fallback Canvas bên dưới nếu MediaPipe lỗi frame
@@ -566,6 +651,7 @@ export function usePoseTracker({
 
         const avgBrightness = totalBrightness / (160 * 120);
         if (avgBrightness < 12) {
+          setDetectedPhoneBox(null);
           if (cameraStatusRef.current !== "blocked") setCameraStatus("blocked");
           return;
         } else if (cameraStatusRef.current === "blocked") {
@@ -586,7 +672,7 @@ export function usePoseTracker({
         }
         lastFrameRef.current = new Uint8ClampedArray(data);
 
-        // Liveness Detection (MU-17): phát hiện ảnh tĩnh hoặc nháy mắt tự nhiên
+        // Liveness Detection (MU-17): chỉ nghi ngờ ảnh tĩnh khi bất động liên tục ~15s
         if (motion < 1400) {
           staticFramesRef.current += 1;
         } else {
@@ -602,8 +688,7 @@ export function usePoseTracker({
           }
         }
 
-        if (staticFramesRef.current >= 28) {
-          // Bất động quá ~7s liên tiếp -> nghi ngờ ảnh tĩnh / ngủ gục
+        if (staticFramesRef.current >= LIVENESS_STATIC_FRAMES) {
           setIsLiveSubject(false);
           setLivenessScore(38);
         } else {
@@ -616,9 +701,10 @@ export function usePoseTracker({
 
         const canvasLikelyAbsent =
           centerSkin < 220 ||
-          (staticFramesRef.current >= 16 && upperMotion < 600);
+          (staticFramesRef.current >= LIVENESS_STATIC_FRAMES && upperMotion < 600);
         if (canvasLikelyAbsent) {
           phoneCandidateFramesRef.current = 0;
+          setDetectedPhoneBox(null);
           absentFramesRef.current += 1;
           if (absentFramesRef.current >= ABSENT_CONFIRM_FRAMES) {
             setCurrentPose("Drowsy / Absent");
@@ -738,6 +824,7 @@ export function usePoseTracker({
     blinkCount,
     visionEngine,
     hasPhoneDetector,
+    detectedPhoneBox,
     distractionSeconds,
     absenceSeconds,
     isDistractionAlert,

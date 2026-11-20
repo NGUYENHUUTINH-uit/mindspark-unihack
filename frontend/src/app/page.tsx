@@ -240,6 +240,7 @@ export default function MindSparkInteractiveStudio() {
     blinkCount,
     visionEngine,
     hasPhoneDetector,
+    detectedPhoneBox,
     distractionSeconds,
     absenceSeconds,
     isDistractionAlert,
@@ -1297,7 +1298,11 @@ export default function MindSparkInteractiveStudio() {
                 ? "⚠️ Vắng mặt / Rời khung hình"
                 : currentPose === "Phone Distraction"
                   ? "📱 Phát hiện điện thoại"
-                  : currentPose;
+                  : currentPose === "Writing Pose"
+                    ? "✍️ Đang cúi viết (Hợp lệ)"
+                    : currentPose === "Reading Pose"
+                      ? "📖 Đang đọc sách (Hợp lệ)"
+                      : currentPose;
 
           return (
             <div
@@ -1528,17 +1533,37 @@ export default function MindSparkInteractiveStudio() {
                           </div>
                         )}
 
+                        {cameraStatus === "active" && detectedPhoneBox && (
+                          <div
+                            className="absolute pointer-events-none border-2 border-rose-500 rounded-xl shadow-[0_0_16px_rgba(244,63,94,0.65)] transition-all duration-150"
+                            style={{
+                              left: `${Math.max(0, Math.min(96, (1 - (detectedPhoneBox.x + detectedPhoneBox.w)) * 100))}%`,
+                              top: `${Math.max(0, Math.min(96, detectedPhoneBox.y * 100))}%`,
+                              width: `${Math.max(6, Math.min(100, detectedPhoneBox.w * 100))}%`,
+                              height: `${Math.max(6, Math.min(100, detectedPhoneBox.h * 100))}%`,
+                            }}
+                          >
+                            <span className="absolute -top-6 left-0 px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-mono font-bold whitespace-nowrap shadow">
+                              📱 Phone {Math.round(detectedPhoneBox.score * 100)}%
+                            </span>
+                          </div>
+                        )}
+
                         {currentPose === "Phone Distraction" && (
-                          <div className="absolute inset-0 bg-rose-950/80 flex flex-col items-center justify-center text-white text-center p-4 animate-pulse">
-                            <Smartphone className="w-8 h-8 mb-1.5 text-rose-400 animate-bounce" />
-                            <span className="text-sm font-bold text-rose-200">
-                              Cảnh báo cầm điện thoại! ({distractionSeconds}s)
-                            </span>
-                            <span className="text-xs text-rose-300 mt-1">
-                              {isDistractionAlert
-                                ? "Đã tạm dừng Pomodoro & phát chuông!"
-                                : `Sẽ tạm dừng đồng hồ sau ${Math.max(0, 5 - distractionSeconds)}s`}
-                            </span>
+                          <div className="absolute inset-0 pointer-events-none border-4 border-rose-500 bg-rose-950/25 rounded-2xl flex flex-col items-center justify-end p-4">
+                            <div className="bg-rose-950/90 border border-rose-500/70 backdrop-blur-xs px-4 py-2.5 rounded-2xl flex items-center gap-2.5 shadow-lg">
+                              <Smartphone className="w-5 h-5 text-rose-400 animate-bounce shrink-0" />
+                              <div className="text-left">
+                                <div className="text-xs sm:text-sm font-bold text-rose-100">
+                                  Cảnh báo cầm điện thoại! ({distractionSeconds}s)
+                                </div>
+                                <div className="text-[11px] text-rose-300">
+                                  {isDistractionAlert
+                                    ? "Đã tạm dừng Pomodoro & phát chuông!"
+                                    : `Sẽ tạm dừng đồng hồ sau ${Math.max(0, 5 - distractionSeconds)}s`}
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         )}
 
