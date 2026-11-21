@@ -26,13 +26,16 @@ module.exports = {
       timeout: 60000,
     },
   },
+  // Tên network trong etherscan PHẢI trùng với tên trong `networks` ("fuji"),
+  // nếu không `npx hardhat verify --network fuji` sẽ không tìm được custom chain.
+  // Routescan (Snowtrace Testnet) không bắt buộc API key thật → fallback "snowtrace".
   etherscan: {
     apiKey: {
-      snowtrace: SNOWTRACE_API_KEY,
+      fuji: SNOWTRACE_API_KEY || "snowtrace",
     },
     customChains: [
       {
-        network: "snowtrace",
+        network: "fuji",
         chainId: 43113,
         urls: {
           apiURL: "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan",
@@ -40,5 +43,8 @@ module.exports = {
         },
       },
     ],
+  },
+  sourcify: {
+    enabled: false,
   },
 };

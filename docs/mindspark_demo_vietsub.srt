@@ -1,0 +1,75 @@
+1
+00:00:00,500 --> 00:00:05,200
+Xin chào Ban Giám Khảo UniHack 2026. Đây là MindSpark — Nền tảng Proof of Cognitive Effort trên Avalanche.
+
+2
+00:00:05,500 --> 00:00:11,500
+Khắc phục tình trạng xao nhãng smartphone và gian lận trong học tập bằng sự kết hợp giữa Edge-AI và Blockchain.
+
+3
+00:00:12,000 --> 00:00:18,000
+Đầu tiên, người học kết nối ví MetaMask trên mạng Avalanche Fuji Testnet và chọn chủ đề học tập.
+
+4
+00:00:18,500 --> 00:00:26,000
+Để tạo động lực kỷ luật, học viên đặt cọc 0.01 AVAX vào Smart Contract StudyStakeVault. Giao dịch được xác nhận sau 1 giây.
+
+5
+00:00:27,000 --> 00:00:34,500
+Phiên học bắt đầu. 100% hình ảnh camera được xử lý bảo mật trên RAM bằng MediaPipe WASM, không gửi video lên máy chủ.
+
+6
+00:00:35,000 --> 00:00:42,000
+Khi người học cúi viết bài hoặc đọc sách, AI nhận diện tư thế nỗ lực sâu và duy trì chỉ số Focus Index 98% đến 100%.
+
+7
+00:00:42,500 --> 00:00:50,000
+Đặc biệt, hệ thống phân biệt được tư thế hai tay ôm đầu suy nghĩ để không bắt nhầm, tôn trọng nhịp tư duy tự nhiên.
+
+8
+00:00:50,500 --> 00:00:58,000
+Khi người học cầm điện thoại thật lên trước mặt, mô hình ObjectDetector lập tức bật cảnh báo đỏ và tự động tạm dừng đồng hồ sau 5 giây.
+
+9
+00:00:58,500 --> 00:01:05,000
+Nếu người học rời khỏi khung hình quá thời gian cho phép, hệ thống cũng tự động kích hoạt chế độ vắng mặt để đảm bảo tính công bằng.
+
+10
+00:01:05,500 --> 00:01:13,000
+Hết giờ học, người học hoàn thành bài thẩm định nhận thức qua 2 lựa chọn: Thuyết trình Feynman 30 giây hoặc Làm Quiz 5 câu.
+
+11
+00:01:13,500 --> 00:01:21,500
+Với Feynman 30 giây, mô hình Whisper bóc băng giọng nói, hiển thị bản transcript minh bạch trước khi gửi AI chấm điểm hiểu bài.
+
+12
+00:01:22,000 --> 00:01:30,000
+Hoặc sinh viên có thể làm Quiz AI 5 câu bám sát tài liệu tải lên. Trả lời đúng từ 3 trên 5 câu để nhận chữ ký mật mã Oracle.
+
+13
+00:01:30,500 --> 00:01:38,500
+Oracle Server cấp chữ ký số EIP-191 hợp lệ trên Avalanche Fuji, chứng minh nỗ lực nhận thức thực sự đã hoàn thành.
+
+14
+00:01:39,000 --> 00:01:47,000
+Học viên bấm Rút cọc: Hợp đồng StudyStakeVault hoàn trả 100% tiền cọc 0.01 AVAX kèm tiền thưởng từ Quỹ phạt Penalty Pool.
+
+15
+00:01:47,500 --> 00:01:55,500
+Đồng thời, thẻ sinh viên Soulbound StudyBadgeSBT tự động được nâng cấp miễn phí gas, thay đổi giao diện SVG động ngay trên chuỗi.
+
+16
+00:01:56,000 --> 00:02:05,000
+Tiếp theo, tại Tab Skill Tree, học viên có thể theo dõi tiến trình 5 cấp bậc học giả và đổi các phần quà giá trị tại Reward Marketplace.
+
+17
+00:02:05,500 --> 00:02:14,000
+Tại Tab Sổ tay Flashcard, các thẻ ghi nhớ vừa học được tự động lưu lại. Học viên có thể hỏi đáp chuyên sâu với AI Socratic Copilot.
+
+18
+00:02:14,500 --> 00:02:22,500
+Mỗi câu hỏi kích hoạt cơ chế vi thanh toán 0.005 AVAX chuẩn HTTP 402, cho phép dòng tiền học bổng vi mô chảy tức thì trên Avalanche.
+
+19
+00:02:23,000 --> 00:02:30,000
+MindSpark — Biến từng phút nỗ lực học tập thành giá trị xác thực trên Blockchain Avalanche. Cảm ơn Ban Giám Khảo!

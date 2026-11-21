@@ -54,7 +54,9 @@ describe("MindSpark Unified API Gateway & x402 Micropayments", function () {
     expect(body.statusCode).to.equal(402);
     expect(body.error).to.equal("Payment Required");
     expect(body.paymentInstructions.protocol).to.equal("x402-avalanche-v1");
-    expect(body.paymentInstructions.recipientContract).to.equal("0x143B9679eE996F1565654a1833709AB84B7Eea3C");
+    const deployedData = require("../deployed-addresses.json");
+    const expectedRailAddress = deployedData.contracts?.x402PaymentRail?.address || "0x25e95555fed513Cb0d5a4Cb9FA0e2A698F5ED9eE";
+    expect(body.paymentInstructions.recipientContract.toLowerCase()).to.equal(expectedRailAddress.toLowerCase());
   });
 
   it("3. [x402 Verified] POST /api/v1/ai/ask-expert khi có queryHash hợp lệ -> Trả về HTTP 200 & Lời giải AI", async function () {

@@ -92,11 +92,13 @@ describe("x402PaymentRail Contract (Inverted Streams & Pay-per-Query)", function
 
       expect(await rail.isQueryPaid(queryHash)).to.be.false;
 
-      await expect(
-        rail.connect(student).payForAiQuery(queryHash, { value: price })
-      )
+      const tx = await rail.connect(student).payForAiQuery(queryHash, { value: price });
+      const receipt = await tx.wait();
+      const block = await ethers.provider.getBlock(receipt.blockNumber);
+
+      await expect(tx)
         .to.emit(rail, "AiQueryPaid")
-        .withArgs(student.address, queryHash, price, (await ethers.provider.getBlock("latest")).timestamp + 1);
+        .withArgs(student.address, queryHash, price, block.timestamp);
 
       expect(await rail.isQueryPaid(queryHash)).to.be.true;
     });

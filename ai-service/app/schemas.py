@@ -53,7 +53,7 @@ class ProofData(BaseModel):
 
 class FeynmanEvaluateResponse(BaseModel):
     """
-    Response của POST /api/feynman/evaluate.
+    Response của POST /api/feynman/evaluate và /api/feynman/evaluate-text.
     proof=None nếu không đạt hoặc oracle lỗi (kèm HTTP 502).
     """
     passed: bool
@@ -62,6 +62,29 @@ class FeynmanEvaluateResponse(BaseModel):
     transcript: str         # Trả về để Frontend có thể hiển thị
     flashcards: list[FlashCard]
     proof: Optional[ProofData] = None
+
+
+class TranscribeResponse(BaseModel):
+    """Response của POST /api/feynman/transcribe (chuyển giọng nói thành văn bản)."""
+    transcript: str
+    word_count: int
+    duration_ms: int
+    likely_silence: bool = False
+
+
+class FeynmanTextEvaluateRequest(BaseModel):
+    """Request của POST /api/feynman/evaluate-text (chấm điểm từ bản transcript đã xem lại)."""
+    transcript: str = Field(..., min_length=1, max_length=10000)
+    wallet_address: str
+    session_id: str
+    minutes_studied: int = Field(..., ge=1)
+    topic: str = Field(..., min_length=1, max_length=500)
+    reference_text: Optional[str] = Field(default=None, max_length=10000)
+
+    @field_validator("wallet_address", mode="before")
+    @classmethod
+    def _check_wallet(cls, v: str) -> str:
+        return validate_wallet(v)
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +114,14 @@ class QuizQuestion(BaseModel):
 class QuizGenerateResponse(BaseModel):
     quiz_id: str
     questions: list[QuizQuestion]
+
+
+class FileExtractResponse(BaseModel):
+    """Response của POST /api/quiz/extract-file (trích xuất văn bản từ tài liệu học tập)."""
+    filename: str
+    extracted_text: str
+    char_count: int
+    suggested_topic: str
 
 
 # ---------------------------------------------------------------------------

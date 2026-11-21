@@ -50,3 +50,6 @@ Thumbs.db
 images/
 *.docx
 *.pdf
+# Gateway runtime state
+contracts/.gateway-processed.json
+

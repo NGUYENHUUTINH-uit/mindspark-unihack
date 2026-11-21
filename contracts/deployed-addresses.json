@@ -3,19 +3,19 @@
   "chainId": 43113,
   "contracts": {
     "StudyStakeVault": {
-      "address": "0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223",
-      "snowtrace": "https://testnet.snowtrace.io/address/0x62A647BD25a4AfD418cFDDAD99cbA3e49B775223",
-      "deployer": "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA"
+      "address": "0xB4B96B56E7b86ed7484Fe26919c509E14E6fb111",
+      "snowtrace": "https://testnet.snowtrace.io/address/0xB4B96B56E7b86ed7484Fe26919c509E14E6fb111",
+      "deployer": "0xA206B966480E6eeE2F3F96e6958899e71501B8e2"
     },
     "StudyBadgeSBT": {
-      "address": "0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86",
-      "snowtrace": "https://testnet.snowtrace.io/address/0x7B8CBC1986855357Ea9383Fd4dd2Aac9C0864B86",
-      "deployer": "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA"
+      "address": "0x9D3756BeE86E9FF34773B4D3f9E323FfdD8F3afA",
+      "snowtrace": "https://testnet.snowtrace.io/address/0x9D3756BeE86E9FF34773B4D3f9E323FfdD8F3afA",
+      "deployer": "0xA206B966480E6eeE2F3F96e6958899e71501B8e2"
     },
     "x402PaymentRail": {
-      "address": "0x143B9679eE996F1565654a1833709AB84B7Eea3C",
-      "snowtrace": "https://testnet.snowtrace.io/address/0x143B9679eE996F1565654a1833709AB84B7Eea3C",
-      "deployer": "0x6A7F6c42F0D6BA4d13cc45fe0072e5aA7c4031aA"
+      "address": "0x25e95555fed513Cb0d5a4Cb9FA0e2A698F5ED9eE",
+      "snowtrace": "https://testnet.snowtrace.io/address/0x25e95555fed513Cb0d5a4Cb9FA0e2A698F5ED9eE",
+      "deployer": "0xA206B966480E6eeE2F3F96e6958899e71501B8e2"
     }
   }
 }

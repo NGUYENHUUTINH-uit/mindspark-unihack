@@ -4,9 +4,12 @@ config.py — Cấu hình tập trung cho ai-service.
 Dùng hàm get_settings() để lấy singleton (cached).
 """
 from functools import lru_cache
+import logging
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("mindspark.config")
 
 
 class Settings(BaseSettings):
@@ -17,8 +20,8 @@ class Settings(BaseSettings):
     )
 
     # --- API Keys ---
-    groq_api_key: str
-    gemini_api_key: str
+    groq_api_key: str = "mock_groq_key"
+    gemini_api_key: str = "mock_gemini_key"
 
     # --- Model names (đọc từ .env, có default an toàn) ---
     stt_model: str = "whisper-large-v3-turbo"
@@ -50,5 +53,11 @@ def get_settings() -> Settings:
     Singleton settings — chỉ đọc .env một lần.
     Trong test, dùng get_settings.cache_clear() để reset.
     """
-    return Settings()
+    settings = Settings()
+    if settings.groq_api_key == "mock_groq_key" or settings.gemini_api_key == "mock_gemini_key":
+        logger.warning(
+            "Đang sử dụng API key mặc định (mock). "
+            "Hãy cấu hình GROQ_API_KEY và GEMINI_API_KEY thật trong ai-service/.env."
+        )
+    return settings
 

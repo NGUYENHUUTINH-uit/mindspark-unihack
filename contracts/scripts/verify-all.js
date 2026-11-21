@@ -6,10 +6,17 @@ async function main() {
   console.log("🔍 TIẾN HÀNH XÁC THỰC MÃ NGUỒN (VERIFY CONTRACTS) TRÊN SNOWTRACE");
   console.log("==========================================================");
 
-  const [deployer] = await hre.ethers.getSigners();
-  const oracleAddress = process.env.ORACLE_ADDRESS || deployer.address;
-
+  // Đọc constructor arg (oracleSigner) TRỰC TIẾP từ on-chain để không verify sai
+  // khi máy chạy script dùng ví khác ví deployer.
   const contracts = deployedData.contracts;
+  const readOracle = async (address) => {
+    const c = new hre.ethers.Contract(address, ["function oracleSigner() view returns (address)"], hre.ethers.provider);
+    return await c.oracleSigner();
+  };
+  const vaultOracle = await readOracle(contracts.StudyStakeVault.address);
+  const railOracle = await readOracle(contracts.x402PaymentRail.address);
+  console.log(`Oracle signer (Vault): ${vaultOracle}`);
+  console.log(`Oracle signer (x402):  ${railOracle}`);
 
   // 1. Verify StudyStakeVault
   if (contracts.StudyStakeVault) {
@@ -17,7 +24,7 @@ async function main() {
     try {
       await hre.run("verify:verify", {
         address: contracts.StudyStakeVault.address,
-        constructorArguments: [oracleAddress],
+        constructorArguments: [vaultOracle],
       });
       console.log("   ✅ StudyStakeVault verified thành công!");
     } catch (err) {
@@ -53,7 +60,7 @@ async function main() {
     try {
       await hre.run("verify:verify", {
         address: contracts.x402PaymentRail.address,
-        constructorArguments: [oracleAddress],
+        constructorArguments: [railOracle],
       });
       console.log("   ✅ x402PaymentRail verified thành công!");
     } catch (err) {
